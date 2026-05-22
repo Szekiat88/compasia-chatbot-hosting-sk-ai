@@ -1,0 +1,8 @@
+README.md
+setup.py
+nlu_core/__init__.py
+nlu_core/engine_core.cpython-314-darwin.so
+nlu_core.egg-info/PKG-INFO
+nlu_core.egg-info/SOURCES.txt
+nlu_core.egg-info/dependency_links.txt
+nlu_core.egg-info/top_level.txt

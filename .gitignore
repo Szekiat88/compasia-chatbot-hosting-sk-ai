@@ -1,0 +1,11 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+models/
+*.joblib
+*.safetensors
+*.pth
+*.pt
+*.xlsx

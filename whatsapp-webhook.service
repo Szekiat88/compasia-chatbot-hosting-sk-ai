@@ -1,0 +1,14 @@
+[Unit]
+Description=CompAsia WhatsApp Webhook
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/compasia-chatbot-hosting-sk-ai
+ExecStart=/home/ubuntu/compasia-chatbot-hosting-sk-ai/venv/bin/python whatsapp_webhook.py
+Restart=always
+RestartSec=5
+EnvironmentFile=/home/ubuntu/compasia-chatbot-hosting-sk-ai/.env
+
+[Install]
+WantedBy=multi-user.target

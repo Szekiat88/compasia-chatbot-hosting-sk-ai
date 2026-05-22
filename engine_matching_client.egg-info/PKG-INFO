@@ -1,0 +1,36 @@
+Metadata-Version: 2.4
+Name: engine-matching-client
+Version: 0.1.1
+Summary: HTTP client helpers for the engine matching Flask API.
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: requests>=2.31.0
+
+
+## Translation endpoint
+
+Run `python gemini_shipping_flask_api.py` and send a `POST /translate` request with JSON such as:
+
+```bash
+curl -X POST http://localhost:5050/translate \
+  -H "Content-Type: application/json" \
+  -d '{"text": "boleh tolong check status order saya?"}'
+```
+
+The API responds with the sanitized original text and an English translation derived from the configured OpenAI model. Basic HTML tags are stripped before translation to handle chat inputs that include markup, and empty prompts are rejected after cleaning. The `/search` endpoint also removes HTML markup, detects Malay inputs, translates them to English, and only skips translation when the request already appears to be English.
+
+## Streamlit chatbot
+
+Run the Flask API first so the UI can delegate search and summarisation to `/search`:
+
+```bash
+python gemini_shipping_flask_api.py
+```
+
+Then launch the Streamlit UI in a separate terminal:
+
+```bash
+streamlit run streamlit_chat.py
+```
+
+By default, the app posts to `http://localhost:5050/search`. Override the endpoint with `CHATBOT_SEARCH_URL` if you deploy the API elsewhere. The sidebar shows the running conversation summary returned by the backend, and the conversation history stays in the session so follow-up questions include prior context.

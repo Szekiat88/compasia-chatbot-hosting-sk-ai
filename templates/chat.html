@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compasia Chatbot</title>
+    <style>
+        :root {
+            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+            color: #111827;
+            background-color: #f3f4f6;
+        }
+
+        body {
+            margin: 0;
+            background: linear-gradient(180deg, #eef2ff 0%, #f3f4f6 100%);
+        }
+
+        .container {
+            max-width: 720px;
+            margin: 40px auto;
+            padding: 24px;
+            background: #ffffff;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+        }
+
+        h1 {
+            margin: 0 0 16px;
+            font-size: 28px;
+        }
+
+        p.description {
+            margin-top: 0;
+            color: #4b5563;
+        }
+
+        label {
+            display: block;
+            font-weight: 600;
+            margin: 16px 0 8px;
+        }
+
+        input[type="text"], select {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            border-radius: 12px;
+            border: 1px solid #e5e7eb;
+            box-sizing: border-box;
+        }
+
+        button {
+            margin-top: 16px;
+            padding: 12px 18px;
+            font-size: 16px;
+            border-radius: 12px;
+            border: none;
+            background: #2563eb;
+            color: #fff;
+            cursor: pointer;
+            transition: background 0.2s ease, transform 0.1s ease;
+        }
+
+        button:disabled {
+            background: #93c5fd;
+            cursor: not-allowed;
+        }
+
+        button:not(:disabled):hover {
+            background: #1d4ed8;
+        }
+
+        button:not(:disabled):active {
+            transform: translateY(1px);
+        }
+
+        .response, .error {
+            margin-top: 20px;
+            padding: 16px;
+            border-radius: 12px;
+            background: #f8fafc;
+            border: 1px solid #e5e7eb;
+        }
+
+        .error {
+            background: #fef2f2;
+            border-color: #fecdd3;
+            color: #b91c1c;
+        }
+
+        .response .label {
+            font-weight: 700;
+            margin-right: 6px;
+        }
+
+        .meta {
+            margin-top: 12px;
+            color: #6b7280;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Compasia Chatbot</h1>
+        <p class="description">Ask a question and get an answer from the knowledge base.</p>
+        <label for="question">Your question</label>
+        <input id="question" type="text" placeholder="Type your question here" />
+
+        <label for="provider">Model provider</label>
+        <select id="provider">
+            <option value="gemini" selected>Gemini</option>
+            <option value="openai">OpenAI</option>
+        </select>
+
+        <button id="askBtn">Ask</button>
+
+        <div id="status" class="meta"></div>
+        <div id="result" class="response" style="display:none;"></div>
+        <div id="error" class="error" style="display:none;"></div>
+    </div>
+
+    <script>
+        const questionInput = document.getElementById('question');
+        const providerSelect = document.getElementById('provider');
+        const askBtn = document.getElementById('askBtn');
+        const resultBox = document.getElementById('result');
+        const errorBox = document.getElementById('error');
+        const statusText = document.getElementById('status');
+
+        async function submitQuestion() {
+            const question = questionInput.value.trim();
+            const provider = providerSelect.value;
+            errorBox.style.display = 'none';
+            resultBox.style.display = 'none';
+
+            if (!question) {
+                errorBox.textContent = 'Please enter a question to search.';
+                errorBox.style.display = 'block';
+                return;
+            }
+
+            askBtn.disabled = true;
+            statusText.textContent = 'Sending your question…';
+
+            try {
+                const response = await fetch('/search', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ question, provider })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Request failed');
+                }
+
+                const anchor = data.anchor_token ? ` (anchor: ${data.anchor_token})` : '';
+                resultBox.innerHTML = `
+                    <div><span class="label">Answer:</span>${data.answer || 'No answer provided.'}</div>
+                    <div class="meta">Confidence: ${data.confidence || 'n/a'}${anchor}</div>
+                `;
+                resultBox.style.display = 'block';
+                statusText.textContent = 'Response received.';
+            } catch (err) {
+                errorBox.textContent = err.message || 'Unexpected error occurred.';
+                errorBox.style.display = 'block';
+                statusText.textContent = '';
+            } finally {
+                askBtn.disabled = false;
+            }
+        }
+
+        askBtn.addEventListener('click', submitQuestion);
+        questionInput.addEventListener('keydown', (evt) => {
+            if (evt.key === 'Enter') {
+                submitQuestion();
+            }
+        });
+    </script>
+</body>
+</html>
