@@ -143,7 +143,7 @@ def run_search(query: str) -> Optional[str]:
                 "tenure": rec.get("tenure", ""),
                 "price": rec.get("price", ""),
                 "reason": "",
-                "variant_link": _build_variant_link(rec.get("handle", ""), key[1]),
+                "variant_link": _build_variant_link(rec.get("handle", ""), key[1], rec.get("src_variant_id")),
                 "product_link": _build_product_link(rec.get("handle", "")),
             }
         )

@@ -7,74 +7,89 @@
 --   * All tables: deleted_at IS NULL filter applied everywhere
 --   * Products:   status = 'published' only
 --   * Availability:
---       available_qty = stocked_quantity - reserved_quantity  (can be negative)
+--       available_qty = stocked_quantity - reserved_quantity
 --       is_available:
---         - manage_inventory = FALSE  → always available (bypass stock check)
---         - manage_inventory = TRUE AND allow_backorder = TRUE → available even if qty <= 0
---         - manage_inventory = TRUE AND allow_backorder = FALSE → available only if qty > 0
+--         - manage_inventory = FALSE        → always available
+--         - manage_inventory = TRUE + allow_backorder = TRUE  → always available
+--         - manage_inventory = TRUE + allow_backorder = FALSE → only if qty > 0
+--   * Price:  latest price per variant (most recent created_at), any currency/list
+--   * Tags → columns:
+--       Color, Colour                                   → color
+--       Capacity, RAM & Storage, Storage, Size,
+--         Phone model, Phone Model, Model,
+--         Tenure, Month, Design                         → spec  (concatenated " | ")
+--       Cosmetic Grading, Cosmetic Grade,
+--         Device Grading, Grade, Condition              → condition
+--       Brand                                           → vendor
+--       tenure column in target                         → NULL (merged into spec)
 -- =============================================================================
 
 
 -- =============================================================================
--- STEP 1 — Preview extraction from NEW DB (run on marketplace_mercur_uat)
+-- STEP 1 — Extraction query (run on marketplace_mercur_uat)
 -- =============================================================================
 
+WITH latest_price AS (
+    SELECT
+        pvps.variant_id,
+        pr.amount,
+        pr.currency_code,
+        ROW_NUMBER() OVER (
+            PARTITION BY pvps.variant_id
+            ORDER BY pr.created_at DESC
+        ) AS rn
+    FROM product_variant_price_set pvps
+    INNER JOIN price pr
+        ON pr.price_set_id = pvps.price_set_id
+       AND pr.deleted_at   IS NULL
+    WHERE pvps.deleted_at IS NULL
+)
 SELECT
-    -- Deterministic BIGINT hash of string UUIDs
-    -- Range ~10^18, safe from collision with Shopify int IDs (~10^13 range)
-    abs(('x' || substr(md5(p.id), 1, 15))::bit(60)::bigint)    AS product_id,
+    abs(('x' || substr(md5(p.id),  1, 15))::bit(60)::bigint)   AS product_id,
     abs(('x' || substr(md5(pv.id), 1, 15))::bit(60)::bigint)   AS variant_id,
 
     p.id                                                         AS src_product_id,
     pv.id                                                        AS src_variant_id,
-
     p.handle,
-    p.title                                                      AS product_title,
 
-    -- Vendor: prefer Brand option, fall back to first word of product title
     COALESCE(
         MAX(CASE WHEN po.title = 'Brand' THEN pov.value END),
         split_part(p.title, ' ', 1)
     )                                                            AS vendor,
 
-    -- Product type
     COALESCE(pt.value, 'Unknown')                                AS product_type,
 
-    -- Color
+    -- color
     MAX(CASE
-        WHEN po.title IN ('Color', 'Colour')     THEN pov.value
+        WHEN po.title IN ('Color', 'Colour') THEN pov.value
     END)                                                         AS color,
 
-    -- Spec / Capacity / Storage
-    MAX(CASE
-        WHEN po.title IN ('Capacity', 'RAM & Storage', 'Size', 'Storage')
-        THEN pov.value
-    END)                                                         AS spec,
+    -- spec: capacity / size / phone model / tenure / design all merged here
+    NULLIF(STRING_AGG(
+        CASE
+            WHEN po.title IN (
+                'Capacity', 'RAM & Storage', 'Storage', 'Size',
+                'Phone model', 'Phone Model', 'Model',
+                'Tenure', 'Month', 'Design'
+            ) THEN pov.value
+        END,
+        ' | '
+        ORDER BY po.title
+    ), '')                                                       AS spec,
 
-    -- Condition / Grade
+    -- condition / grade
     MAX(CASE
-        WHEN po.title IN ('Cosmetic Grading', 'Cosmetic Grade',
-                          'Device Grading', 'Grade', 'Condition')
-        THEN pov.value
+        WHEN po.title IN (
+            'Cosmetic Grading', 'Cosmetic Grade',
+            'Device Grading', 'Grade', 'Condition'
+        ) THEN pov.value
     END)                                                         AS condition,
 
-    -- Base selling price in MYR (lowest price, no promo list)
-    MIN(pr.amount)                                               AS price,
+    -- latest price (most recent created_at, any currency / price list)
+    lp.amount                                                    AS price,
 
-    -- Tenure / Monthly installment option
-    MAX(CASE
-        WHEN po.title IN ('Tenure', 'Month')     THEN pov.value
-    END)                                                         AS tenure,
-
-    -- Raw stock values (used by availability logic below)
-    pv.manage_inventory,
-    pv.allow_backorder,
     COALESCE(SUM(il.stocked_quantity - il.reserved_quantity), 0) AS available_qty,
 
-    -- Derived availability flag:
-    --   not manage_inventory          → always available
-    --   manage_inventory + backorder  → always available
-    --   manage_inventory + no backord → only if stock > 0
     CASE
         WHEN pv.manage_inventory = FALSE
             THEN TRUE
@@ -89,56 +104,65 @@ SELECT
 FROM product p
 
 JOIN product_variant pv
-    ON pv.product_id = p.id
-    AND pv.deleted_at IS NULL
+    ON pv.product_id  = p.id
+   AND pv.deleted_at  IS NULL
 
 LEFT JOIN product_type pt
-    ON pt.id = p.type_id
-    AND pt.deleted_at IS NULL
+    ON pt.id          = p.type_id
+   AND pt.deleted_at  IS NULL
 
 LEFT JOIN product_variant_option pvo
     ON pvo.variant_id = pv.id
 
 LEFT JOIN product_option_value pov
-    ON pov.id = pvo.option_value_id
-    AND pov.deleted_at IS NULL
+    ON pov.id         = pvo.option_value_id
+   AND pov.deleted_at IS NULL
 
 LEFT JOIN product_option po
-    ON po.id = pov.option_id
-    AND po.deleted_at IS NULL
-
-LEFT JOIN product_variant_price_set pvps
-    ON pvps.variant_id = pv.id
-    AND pvps.deleted_at IS NULL
-
-LEFT JOIN price pr
-    ON pr.price_set_id = pvps.price_set_id
-    AND pr.deleted_at IS NULL
-    AND pr.currency_code = 'myr'
-    AND pr.price_list_id IS NULL  -- base price only, exclude promo price lists
+    ON po.id          = pov.option_id
+   AND po.deleted_at  IS NULL
 
 LEFT JOIN product_variant_inventory_item pvii
     ON pvii.variant_id = pv.id
-    AND pvii.deleted_at IS NULL
+   AND pvii.deleted_at IS NULL
 
 LEFT JOIN inventory_level il
     ON il.inventory_item_id = pvii.inventory_item_id
-    AND il.deleted_at IS NULL
+   AND il.deleted_at        IS NULL
+
+INNER JOIN latest_price lp
+    ON lp.variant_id = pv.id
+   AND lp.rn         = 1
 
 WHERE p.deleted_at IS NULL
-  AND p.status    = 'published'
+  AND p.status      = 'published'
+  AND (
+      pv.manage_inventory = FALSE
+      OR (
+          pv.manage_inventory = TRUE
+          AND COALESCE(il.stocked_quantity - il.reserved_quantity, 0) > 0
+      )
+      OR (
+          pv.manage_inventory = TRUE
+          AND pv.allow_backorder = TRUE
+          AND COALESCE(il.stocked_quantity - il.reserved_quantity, 0) <= 0
+      )
+  )
 
 GROUP BY
-    p.id, pv.id, p.handle, p.title,
-    pt.value,
-    pv.manage_inventory, pv.allow_backorder
+    p.id, pv.id, p.handle, pt.value,
+    pv.manage_inventory, pv.allow_backorder,
+    lp.amount
 
-ORDER BY p.title, pv.id;
+ORDER BY p.handle, pv.id;
 
 
 -- =============================================================================
 -- STEP 2 — Create table on FAISS DB (ai-grading-uat) — run once
 -- =============================================================================
+-- Structure mirrors shopify_variant_new so build_vectors.py can UNION ALL both.
+-- The tenure column is retained for schema compatibility but is always NULL
+-- for marketplace data (tenure values are stored in spec instead).
 
 CREATE TABLE IF NOT EXISTS marketplace_variant (
     product_id      BIGINT NOT NULL,
@@ -152,7 +176,7 @@ CREATE TABLE IF NOT EXISTS marketplace_variant (
     spec            TEXT,
     condition       TEXT,
     price           NUMERIC(12,2),
-    tenure          TEXT,
+    tenure          TEXT,               -- always NULL; tenure value lives in spec
     available_qty   INTEGER  DEFAULT 0,
     is_available    BOOLEAN  DEFAULT FALSE,
     synced_at       TIMESTAMPTZ DEFAULT now(),

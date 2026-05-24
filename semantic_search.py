@@ -115,15 +115,7 @@ def fetch_full_records(conn, keys: List[Tuple[int, int]]) -> List[Dict[str, obje
     if not keys:
         return []
     cols = "product_id, variant_id, handle, vendor, product_type, color, spec, condition, price, tenure"
-    if _marketplace_table_exists(conn):
-        source_sql = f"""
-            SELECT {cols} FROM shopify_variant_new
-            UNION ALL
-            SELECT {cols} FROM marketplace_variant WHERE is_available = TRUE
-        """
-    else:
-        source_sql = f"SELECT {cols} FROM shopify_variant_new"
-
+    source_sql = f"SELECT {cols}, src_variant_id FROM marketplace_variant WHERE is_available = TRUE"
     sql = f"""
         SELECT s.*
         FROM ({source_sql}) s
@@ -138,8 +130,9 @@ def fetch_full_records(conn, keys: List[Tuple[int, int]]) -> List[Dict[str, obje
 def fetch_available_models(conn, prefix: str, limit: int = 50) -> List[str]:
     sql = """
         SELECT DISTINCT handle
-        FROM shopify_variant_new
+        FROM marketplace_variant
         WHERE handle ILIKE %s
+          AND is_available = TRUE
         ORDER BY handle
         LIMIT %s
     """
@@ -204,7 +197,7 @@ def build_search_query(
     return search_query, recommended_model, price_min, price_max
 
 
-_PRODUCT_FIELDS = ["vendor", "product_type", "handle", "color", "spec", "condition", "tenure", "price"]
+_PRODUCT_FIELDS = ["vendor", "product_type", "handle", "color", "spec", "condition", "tenure", "price", "src_variant_id"]
 
 
 def load_cache(cache_dir: Optional[str] = None) -> Dict[str, object]:

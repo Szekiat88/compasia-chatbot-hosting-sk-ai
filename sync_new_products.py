@@ -60,15 +60,33 @@ FAISS_DB_ENV = "db.env"
 # ---------------------------------------------------------------------------
 # Extraction SQL — runs on marketplace_mercur_uat
 # ---------------------------------------------------------------------------
+# Price: latest price per variant (most recent created_at), any currency/list.
+# Spec:  all capacity/size/model/tenure/design tags concatenated with " | ".
+#        tenure is merged into spec (tenure column in target is left NULL).
+# ---------------------------------------------------------------------------
 EXTRACT_SQL = """
+WITH latest_price AS (
+    SELECT
+        pvps.variant_id,
+        pr.amount,
+        pr.currency_code,
+        ROW_NUMBER() OVER (
+            PARTITION BY pvps.variant_id
+            ORDER BY pr.created_at DESC
+        ) AS rn
+    FROM product_variant_price_set pvps
+    INNER JOIN price pr
+        ON pr.price_set_id = pvps.price_set_id
+       AND pr.deleted_at   IS NULL
+    WHERE pvps.deleted_at IS NULL
+)
 SELECT
-    abs(('x' || substr(md5(p.id), 1, 15))::bit(60)::bigint)    AS product_id,
+    abs(('x' || substr(md5(p.id),  1, 15))::bit(60)::bigint)   AS product_id,
     abs(('x' || substr(md5(pv.id), 1, 15))::bit(60)::bigint)   AS variant_id,
 
     p.id                                                         AS src_product_id,
     pv.id                                                        AS src_variant_id,
     p.handle,
-    p.title                                                      AS product_title,
 
     COALESCE(
         MAX(CASE WHEN po.title = 'Brand' THEN pov.value END),
@@ -77,85 +95,102 @@ SELECT
 
     COALESCE(pt.value, 'Unknown')                                AS product_type,
 
+    -- color
     MAX(CASE
         WHEN po.title IN ('Color', 'Colour') THEN pov.value
     END)                                                         AS color,
 
-    MAX(CASE
-        WHEN po.title IN ('Capacity', 'RAM & Storage', 'Size', 'Storage')
-        THEN pov.value
-    END)                                                         AS spec,
+    -- spec: capacity / size / phone model / tenure / design all merged here
+    NULLIF(STRING_AGG(
+        CASE
+            WHEN po.title IN (
+                'Capacity', 'RAM & Storage', 'Storage', 'Size',
+                'Phone model', 'Phone Model', 'Model',
+                'Tenure', 'Month', 'Design'
+            ) THEN pov.value
+        END,
+        ' | '
+        ORDER BY po.title
+    ), '')                                                       AS spec,
 
+    -- condition / grade
     MAX(CASE
-        WHEN po.title IN ('Cosmetic Grading', 'Cosmetic Grade',
-                          'Device Grading', 'Grade', 'Condition')
-        THEN pov.value
+        WHEN po.title IN (
+            'Cosmetic Grading', 'Cosmetic Grade',
+            'Device Grading', 'Grade', 'Condition'
+        ) THEN pov.value
     END)                                                         AS condition,
 
-    MIN(pr.amount)                                               AS price,
-
-    MAX(CASE
-        WHEN po.title IN ('Tenure', 'Month') THEN pov.value
-    END)                                                         AS tenure,
+    -- latest price (most recent created_at, any currency / price list)
+    lp.amount                                                    AS price,
 
     COALESCE(SUM(il.stocked_quantity - il.reserved_quantity), 0) AS available_qty,
 
     CASE
-        WHEN pv.manage_inventory = FALSE                          THEN TRUE
-        WHEN pv.manage_inventory = TRUE AND pv.allow_backorder = TRUE  THEN TRUE
+        WHEN pv.manage_inventory = FALSE
+            THEN TRUE
+        WHEN pv.manage_inventory = TRUE AND pv.allow_backorder = TRUE
+            THEN TRUE
         WHEN pv.manage_inventory = TRUE AND pv.allow_backorder = FALSE
              AND COALESCE(SUM(il.stocked_quantity - il.reserved_quantity), 0) > 0
-                                                                  THEN TRUE
+            THEN TRUE
         ELSE FALSE
     END                                                          AS is_available
 
 FROM product p
 
 JOIN product_variant pv
-    ON pv.product_id   = p.id
-   AND pv.deleted_at   IS NULL
+    ON pv.product_id  = p.id
+   AND pv.deleted_at  IS NULL
 
 LEFT JOIN product_type pt
-    ON pt.id           = p.type_id
-   AND pt.deleted_at   IS NULL
+    ON pt.id          = p.type_id
+   AND pt.deleted_at  IS NULL
 
 LEFT JOIN product_variant_option pvo
-    ON pvo.variant_id  = pv.id
+    ON pvo.variant_id = pv.id
 
 LEFT JOIN product_option_value pov
-    ON pov.id          = pvo.option_value_id
-   AND pov.deleted_at  IS NULL
+    ON pov.id         = pvo.option_value_id
+   AND pov.deleted_at IS NULL
 
 LEFT JOIN product_option po
-    ON po.id           = pov.option_id
-   AND po.deleted_at   IS NULL
-
-LEFT JOIN product_variant_price_set pvps
-    ON pvps.variant_id = pv.id
-   AND pvps.deleted_at IS NULL
-
-LEFT JOIN price pr
-    ON pr.price_set_id  = pvps.price_set_id
-   AND pr.deleted_at    IS NULL
-   AND pr.currency_code = 'myr'
-   AND pr.price_list_id IS NULL
+    ON po.id          = pov.option_id
+   AND po.deleted_at  IS NULL
 
 LEFT JOIN product_variant_inventory_item pvii
-    ON pvii.variant_id  = pv.id
-   AND pvii.deleted_at  IS NULL
+    ON pvii.variant_id = pv.id
+   AND pvii.deleted_at IS NULL
 
 LEFT JOIN inventory_level il
     ON il.inventory_item_id = pvii.inventory_item_id
    AND il.deleted_at        IS NULL
 
+INNER JOIN latest_price lp
+    ON lp.variant_id = pv.id
+   AND lp.rn         = 1
+
 WHERE p.deleted_at IS NULL
-  AND p.status     = 'published'
+  AND p.status      = 'published'
+  AND (
+      pv.manage_inventory = FALSE
+      OR (
+          pv.manage_inventory = TRUE
+          AND COALESCE(il.stocked_quantity - il.reserved_quantity, 0) > 0
+      )
+      OR (
+          pv.manage_inventory = TRUE
+          AND pv.allow_backorder = TRUE
+          AND COALESCE(il.stocked_quantity - il.reserved_quantity, 0) <= 0
+      )
+  )
 
 GROUP BY
-    p.id, pv.id, p.handle, p.title, pt.value,
-    pv.manage_inventory, pv.allow_backorder
+    p.id, pv.id, p.handle, pt.value,
+    pv.manage_inventory, pv.allow_backorder,
+    lp.amount
 
-ORDER BY p.title, pv.id
+ORDER BY p.handle, pv.id
 """
 
 ENSURE_TABLE_SQL = """
@@ -287,10 +322,10 @@ def to_tuple(r: Dict[str, Any]):
         str(r.get("vendor") or ""),
         str(r.get("product_type") or ""),
         str(r.get("color") or "") or None,
-        str(r.get("spec") or "") or None,
+        str(r.get("spec") or "") or None,   # includes capacity/size/model/tenure/design
         str(r.get("condition") or "") or None,
         _dec(r.get("price")),
-        str(r.get("tenure") or "") or None,
+        None,                                # tenure merged into spec; column left NULL
         _int(r.get("available_qty")),
         bool(r.get("is_available", False)),
     )

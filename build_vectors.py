@@ -62,16 +62,7 @@ def _marketplace_table_exists(conn) -> bool:
 
 def fetch_rows(conn, limit: Optional[int]) -> List[Dict[str, object]]:
     cols = "product_id, variant_id, color, spec, condition, price, handle, vendor, product_type, tenure"
-    base_sql = f"SELECT {cols} FROM shopify_variant_new"
-
-    if _marketplace_table_exists(conn):
-        sql = f"""
-            SELECT {cols} FROM shopify_variant_new
-            UNION ALL
-            SELECT {cols} FROM marketplace_variant WHERE is_available = TRUE
-        """
-    else:
-        sql = base_sql
+    sql = f"SELECT {cols}, src_variant_id FROM marketplace_variant WHERE is_available = TRUE"
 
     if limit is not None:
         sql = f"SELECT * FROM ({sql}) _all LIMIT %s"
@@ -143,7 +134,7 @@ def build_faiss_index(vectors: np.ndarray) -> faiss.IndexFlatIP:
     return index
 
 
-_PRODUCT_FIELDS = ["vendor", "product_type", "handle", "color", "spec", "condition", "tenure", "price"]
+_PRODUCT_FIELDS = ["vendor", "product_type", "handle", "color", "spec", "condition", "tenure", "price", "src_variant_id"]
 
 
 def save_cache(

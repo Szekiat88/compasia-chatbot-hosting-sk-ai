@@ -21,7 +21,7 @@ from semantic_search import (
 
 TOP_K = 3
 CANDIDATE_K = 50
-SHOP_DOMAIN = os.getenv("SHOP_DOMAIN", "compasia-malaysia.myshopify.com")
+SHOP_DOMAIN = os.getenv("SHOP_DOMAIN", "compasia.my")
 
 
 def _normalize_domain(shop_domain: str) -> str:
@@ -36,11 +36,15 @@ def _build_product_link(handle: str) -> str:
     return f"https://{domain}/products/{handle}" if domain else ""
 
 
-def _build_variant_link(handle: str, variant_id: object) -> str:
+def _build_variant_link(handle: str, variant_id: object, src_variant_id: str | None = None) -> str:
     product_link = _build_product_link(handle)
-    if not product_link or not variant_id:
+    if not product_link:
         return ""
-    return f"{product_link}?variant={variant_id}"
+    # Prefer Medusa UUID (marketplace products); fall back to numeric Shopify ID
+    vid = src_variant_id if src_variant_id else (str(variant_id) if variant_id else None)
+    if not vid:
+        return product_link
+    return f"{product_link}?variant={vid}"
 
 
 def _to_float(value: object) -> Optional[float]:
@@ -224,17 +228,19 @@ def _format_cards(rows: List[Dict[str, object]]) -> str:
 
     blocks: List[str] = []
     for idx, r in enumerate(rows, start=1):
-        product_link = str(r.get("product_link", "") or "").strip() or "-"
+        variant_link = str(r.get("variant_link", "") or "").strip()
+        product_link = str(r.get("product_link", "") or "").strip()
+        display_link = variant_link or product_link or "-"
         options = _compact_values(r.get("storage_options", r.get("spec", "-")))
         conditions = _compact_values(r.get("condition_options", r.get("condition", "-")))
         colors = _compact_values(r.get("color_options", r.get("color", "-")))
         block = (
             f"{idx}. {_pretty_handle(r.get('handle', ''))}\n"
-            f"From {_format_from_price_rm(r.get('from_price', r.get('price', '')))}\n"
+            f"{_format_from_price_rm(r.get('price', ''))}\n"
             f"Options: {options}\n"
             f"Condition: {conditions}\n"
             f"Color: {colors}\n"
-            f"View options: {product_link}"
+            f"View options: {display_link}"
         )
         blocks.append(block)
     return "\n\n".join(blocks)
@@ -272,6 +278,8 @@ def build_diverse_model_rows(
         if not _passes_price_filter(rec.get("price"), price_min, price_max):
             continue
 
+        is_marketplace = bool(rec.get("src_variant_id"))
+
         if handle not in grouped:
             grouped[handle] = {
                 "first_rank": rank,
@@ -279,6 +287,7 @@ def build_diverse_model_rows(
                 "best_key": key,
                 "best_price": _to_float(rec.get("price")),
                 "min_price": _to_float(rec.get("price")),
+                "min_marketplace_price": _to_float(rec.get("price")) if is_marketplace else None,
                 "storage_options": [],
                 "condition_options": [],
                 "color_options": [],
@@ -290,13 +299,17 @@ def build_diverse_model_rows(
         price_value = _to_float(rec.get("price"))
         current_best_score = float(group["best_score"])
         current_best_price = group.get("best_price")
+        # Prefer marketplace records for best_key so variant_link uses src_variant_id
+        current_best_is_marketplace = bool(record_map.get(group["best_key"], {}).get("src_variant_id"))
         better_by_score = score_value > current_best_score
         better_by_price = (
             score_value == current_best_score
             and price_value is not None
             and (current_best_price is None or price_value < current_best_price)
         )
-        if better_by_score or better_by_price:
+        # Upgrade to marketplace record even at same score if current best is Shopify
+        better_by_source = is_marketplace and not current_best_is_marketplace
+        if better_by_score or better_by_price or better_by_source:
             group["best_score"] = score_value
             group["best_key"] = key
             group["best_price"] = price_value
@@ -304,6 +317,12 @@ def build_diverse_model_rows(
         min_price = group.get("min_price")
         if price_value is not None and (min_price is None or price_value < min_price):
             group["min_price"] = price_value
+
+        # Track marketplace-only min price separately
+        if is_marketplace and price_value is not None:
+            mp = group.get("min_marketplace_price")
+            if mp is None or price_value < mp:
+                group["min_marketplace_price"] = price_value
 
         spec = str(rec.get("spec", "") or "").strip()
         if spec and spec not in group["storage_options"]:
@@ -328,8 +347,6 @@ def build_diverse_model_rows(
         group = grouped[handle]
         best_key = group["best_key"]
         best_rec = record_map.get(best_key, {})
-        storage_options = sorted(group["storage_options"], key=_storage_sort_key)
-        color_options = group["color_options"]
         rows.append(
             {
                 "rank": group["first_rank"],
@@ -339,11 +356,10 @@ def build_diverse_model_rows(
                 "condition": best_rec.get("condition", ""),
                 "tenure": best_rec.get("tenure", ""),
                 "price": best_rec.get("price", ""),
-                "from_price": group["min_price"] if group["min_price"] is not None else best_rec.get("price", ""),
-                "storage_options": storage_options,
-                "condition_options": group["condition_options"],
-                "color_options": color_options,
-                "variant_link": _build_variant_link(handle, best_key[1]),
+                "storage_options": [best_rec.get("spec")] if best_rec.get("spec") else [],
+                "condition_options": [best_rec.get("condition")] if best_rec.get("condition") else [],
+                "color_options": [best_rec.get("color")] if best_rec.get("color") else [],
+                "variant_link": _build_variant_link(handle, best_key[1], best_rec.get("src_variant_id")),
                 "product_link": _build_product_link(handle),
             }
         )
