@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Iterable, Tuple
 
+import numpy as np
 from dotenv import load_dotenv
-import google.genai as _gapi
-from google.genai.errors import ServerError as _SvcError
 from openai import OpenAI
 
 from _params import _T
@@ -16,35 +16,36 @@ from _params import _T
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
-_KEY_A = os.getenv("GEMINI_API_KEY")
 _KEY_B = os.getenv("OPENAI_API_KEY")
-_ENGINE_A = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
-_ENGINE_B = os.getenv("FALLBACK_GEMINI_MODEL", "models/gemini-2.0-flash")
 _ENGINE_C = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 LOG_TICKET = "log_ticket"
 
-# Public aliases expected by nlu_core
-DEFAULT_GEMINI_MODEL = _ENGINE_A
+EMBED_MODEL = "all-MiniLM-L6-v2"
+
+# Public aliases expected by nlu_core (kept for backwards compatibility)
+DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
 DEFAULT_OPENAI_MODEL = _ENGINE_C
-FALLBACK_GEMINI_MODEL = _ENGINE_B
-MATCH_GEMINI_MODEL = os.getenv("MATCH_GEMINI_MODEL", _ENGINE_A)
+FALLBACK_GEMINI_MODEL = os.getenv("FALLBACK_GEMINI_MODEL", "models/gemini-2.0-flash")
+MATCH_GEMINI_MODEL = os.getenv("MATCH_GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+
+_embed_model_instance = None
+_embed_lock = threading.Lock()
 
 
-def _get_engine_client() -> _gapi.Client:
-    if not _KEY_A:
-        raise RuntimeError("Missing required API key. Check your .env file.")
-    return _gapi.Client(api_key=_KEY_A)
+def _get_embed_model():
+    global _embed_model_instance
+    with _embed_lock:
+        if _embed_model_instance is None:
+            from sentence_transformers import SentenceTransformer
+            os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+            _embed_model_instance = SentenceTransformer(EMBED_MODEL, device="cpu")
+        return _embed_model_instance
 
 
 def _get_alt_client() -> OpenAI:
     if not _KEY_B:
         raise RuntimeError("Missing required API key. Check your .env file.")
     return OpenAI(api_key=_KEY_B)
-
-
-def _run(client, spec: str, model: str = "") -> str:
-    response = client.models.generate_content(model=model or _ENGINE_A, contents=spec)
-    return (response.text or "").strip()
 
 
 def _build_default_stock_schema() -> str:
@@ -146,44 +147,30 @@ def detect_escalation(user_question: str) -> Tuple[bool, str]:
     return False, ""
 
 
+_INTENT_MATCH_THRESHOLD = 0.30
+
+
 def engine_match(
     user_question: str,
     knowledge_df,
-    provider: str = "gemini",
+    provider: str = "local",
     conversation_summary: str = "",
     stock_table_schema: str = "",
 ) -> Tuple[str, float, object | None]:
     keyword_series = knowledge_df["keyword"].astype(str).str.strip()
     options = keyword_series.tolist()
-    _spec = _build_spec(user_question, options, conversation_summary)
-    provider_name = provider.lower()
 
-    if provider_name == "gemini":
-        client = _get_engine_client()
-        try:
-            match = _run(client, _spec, _ENGINE_A)
-        except _SvcError as exc:
-            if exc.status_code != 503:
-                raise
-            print("⚠️ Primary engine unavailable, switching to backup")
-            match = _run(client, _spec, _ENGINE_B)
-        score = 0.0
-    elif provider_name == "openai":
-        client = _get_alt_client()
-        response = client.chat.completions.create(
-            model=_ENGINE_C,
-            messages=[
-                {"role": "system", "content": _T[4]},
-                {"role": "user", "content": _spec},
-            ],
-            response_format={"type": "json_object"},
-        )
-        parsed = json.loads(response.choices[0].message.content)
-        match = str(parsed.get("match", "NO_MATCH")).strip()
-        score = float(parsed.get("score", 0))
-    else:
-        raise ValueError("Unsupported provider.")
+    model = _get_embed_model()
+    q_vec = model.encode([user_question], convert_to_numpy=True, normalize_embeddings=True)[0]
+    opt_vecs = model.encode(options, convert_to_numpy=True, normalize_embeddings=True)
+    scores = np.dot(opt_vecs, q_vec)
+    best_idx = int(np.argmax(scores))
+    score = float(scores[best_idx])
 
+    if score < _INTENT_MATCH_THRESHOLD:
+        return "NO_MATCH", 0.0, None
+
+    match = options[best_idx]
     upper = match.strip().upper()
     if upper == "TICKET_LOGGED":
         match = "TICKET_LOGGED"
@@ -201,7 +188,7 @@ def engine_match(
 def find_relevant_history_reply(
     conversation_history: Iterable[str],
     current_question: str,
-    provider: str = "gemini",
+    provider: str = "local",
 ) -> str | None:
     cleaned = [str(m).strip() for m in conversation_history if str(m).strip()]
     trimmed = current_question.strip()
@@ -210,56 +197,26 @@ def find_relevant_history_reply(
     if not cleaned or not trimmed:
         return None
 
-    transcript = "\n".join(cleaned)
-    _spec = _T[2].replace("{trimmed}", trimmed).replace("{transcript}", transcript)
-
-    if provider.lower() == "openai":
-        client = _get_alt_client()
-        response = client.chat.completions.create(
-            model=_ENGINE_C,
-            messages=[
-                {"role": "system", "content": _T[5]},
-                {"role": "user", "content": _spec},
-            ],
-            response_format={"type": "json_object"},
-        )
-        match = str(json.loads(response.choices[0].message.content).get("reply", "NO_MATCH")).strip()
-    else:
-        client = _get_engine_client()
-        match = _run(client, _spec, _ENGINE_A)
-
-    return None if not match or match.lower() == "no_match" else match
+    model = _get_embed_model()
+    q_vec = model.encode([trimmed], convert_to_numpy=True, normalize_embeddings=True)[0]
+    h_vecs = model.encode(cleaned, convert_to_numpy=True, normalize_embeddings=True)
+    sim_scores = np.dot(h_vecs, q_vec)
+    best_idx = int(np.argmax(sim_scores))
+    if float(sim_scores[best_idx]) < 0.5:
+        return None
+    return cleaned[best_idx]
 
 
 def summarize_conversation(
     conversation_history: Iterable[str],
-    provider: str = "gemini",
+    provider: str = "local",
     previous_summary: str = "",
 ) -> str:
     history_lines = [str(m).strip() for m in conversation_history if str(m).strip()]
     if not history_lines:
         return previous_summary.strip()
-
-    transcript = "\n".join(history_lines)
-    summary_section = f"Previous summary:\n\"\"\"\n{previous_summary}\n\"\"\"\n\n"
-    _spec = _T[3].replace("{summary_section}", summary_section).replace("{transcript}", transcript)
-
-    if provider.lower() == "openai":
-        client = _get_alt_client()
-        response = client.chat.completions.create(
-            model=_ENGINE_C,
-            messages=[
-                {"role": "system", "content": _T[6]},
-                {"role": "user", "content": _spec},
-            ],
-        )
-        return response.choices[0].message.content.strip()
-
-    client = _get_engine_client()
-    try:
-        result = _run(client, _spec, _ENGINE_A)
-    except _SvcError as exc:
-        if exc.status_code != 503:
-            raise
-        result = _run(client, _spec, _ENGINE_B)
-    return result
+    recent = history_lines[-6:]
+    summary = "\n".join(recent)
+    if previous_summary.strip():
+        return f"{previous_summary.strip()}\n{summary}"
+    return summary

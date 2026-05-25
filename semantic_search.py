@@ -11,7 +11,7 @@ import psycopg2
 import psycopg2.extras
 from sentence_transformers import SentenceTransformer
 import pyarrow.parquet as pq
-from google import genai as _gapi
+import re as _re
 
 try:
     import faiss  # type: ignore
@@ -29,7 +29,6 @@ CACHE_DIR = os.getenv("SEMANTIC_CACHE_DIR", ".cache_semantic_search")
 CACHE_META = "meta.json"
 CACHE_INDEX = "index.faiss"
 CACHE_EMBEDDINGS = "embeddings.parquet"
-from _ai_config import get_primary_key as _get_primary_key, PRIMARY_MODEL as _PRIMARY_MODEL
 
 class _NumpyIPIndex:
     """Minimal FAISS-like index fallback using inner-product search."""
@@ -145,55 +144,48 @@ def build_search_query(
     query: str,
     available_models: Optional[List[str]] = None,
 ) -> Tuple[str, str, Optional[float], Optional[float]]:
-    api_key = _get_primary_key()
-    if not api_key:
-        raise RuntimeError("Missing required API key. Check your .env file.")
+    text = query.strip()
+    price_min: Optional[float] = None
+    price_max: Optional[float] = None
 
-    client = _gapi.Client(api_key=api_key)
-    _sys = _T[13]
+    # "between X and/to Y" or "RM X to Y"
+    m = _re.search(
+        r'(?:between|from)\s*(?:rm)?\s*([\d,]+)\s*(?:to|and|-)\s*(?:rm)?\s*([\d,]+)',
+        text, _re.I,
+    )
+    if not m:
+        m = _re.search(r'(?:rm)?\s*([\d,]+)\s*(?:to|-)\s*(?:rm)?\s*([\d,]+)', text, _re.I)
+    if m:
+        price_min = float(m.group(1).replace(',', ''))
+        price_max = float(m.group(2).replace(',', ''))
+    else:
+        # "under / below / less than X"
+        m2 = _re.search(r'(?:under|below|less\s+than)\s*(?:rm)?\s*([\d,]+)', text, _re.I)
+        if m2:
+            price_max = float(m2.group(1).replace(',', ''))
+        # "above / over / more than X"
+        m3 = _re.search(r'(?:above|over|more\s+than)\s*(?:rm)?\s*([\d,]+)', text, _re.I)
+        if m3:
+            price_min = float(m3.group(1).replace(',', ''))
+
+    # Strip price clauses to get a cleaner search query
+    search_query = _re.sub(
+        r'(?:under|below|above|over|less\s+than|more\s+than|between|from)\s*(?:rm)?\s*[\d,]+'
+        r'(?:\s*(?:to|and|-)\s*(?:rm)?\s*[\d,]+)?',
+        '', text, flags=_re.I,
+    )
+    search_query = _re.sub(r'(?:rm)?\s*[\d,]+\s*(?:to|-)\s*(?:rm)?\s*[\d,]+', '', search_query, flags=_re.I)
+    search_query = _re.sub(r'\s+', ' ', search_query).strip() or text
+
+    # Match against available model handles (exact substring)
+    recommended_model = ""
     if available_models:
-        _sys += _T[14].replace("{models_list}", ", ".join(available_models))
-    _spec = _sys + "\nQuery: " + query
-    response = client.models.generate_content(model=_PRIMARY_MODEL, contents=_spec)
-    text = (response.text or "").strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        text = text.replace("json", "", 1).strip()
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"AI returned non-JSON response: {text}") from exc
+        q_lower = text.lower()
+        for mdl in available_models:
+            if mdl.lower() in q_lower:
+                recommended_model = mdl
+                break
 
-    search_query = data.get("search_query", "").strip()
-    if not search_query:
-        search_query = query.strip()
-    recommended_model = data.get("recommended_model", "")
-    if isinstance(recommended_model, str):
-        recommended_model = recommended_model.strip()
-    else:
-        recommended_model = ""
-    if available_models and recommended_model and recommended_model not in available_models:
-        recommended_model = ""
-    price_min = data.get("price_min", None)
-    price_max = data.get("price_max", None)
-    if isinstance(price_min, (int, float)):
-        price_min = float(price_min)
-    elif isinstance(price_min, str):
-        try:
-            price_min = float(price_min.replace(",", "").strip())
-        except ValueError:
-            price_min = None
-    else:
-        price_min = None
-    if isinstance(price_max, (int, float)):
-        price_max = float(price_max)
-    elif isinstance(price_max, str):
-        try:
-            price_max = float(price_max.replace(",", "").strip())
-        except ValueError:
-            price_max = None
-    else:
-        price_max = None
     return search_query, recommended_model, price_min, price_max
 
 

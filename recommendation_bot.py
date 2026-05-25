@@ -4,9 +4,6 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from sentence_transformers import SentenceTransformer
-from google import genai as _gapi
-
-from _ai_config import get_primary_key as _get_primary_key, PRIMARY_MODEL as _AI_MODEL
 from _params import _T
 from semantic_search import (
     DB_ENV_PATH,
@@ -385,50 +382,28 @@ def _build_human_reply(
     price_min: Optional[float],
     price_max: Optional[float],
 ) -> str:
-    api_key = _get_primary_key()
-    if not api_key:
-        raise RuntimeError("Missing required API key. Check your .env file.")
+    if not top_rows:
+        return "I'm sorry, I couldn't find any matching products for your request."
 
-    client = _gapi.Client(api_key=api_key)
-
-    # Keep memory light: last 3 turns
-    history = memory[-3:]
-    history_text = "\n".join(
-        f"User: {m['user']}\nBot: {m['bot']}" for m in history if m.get("user") and m.get("bot")
-    )
-
-    catalog_snippet = "\n".join(
-        f"- {r['handle']} | {r['color']} | {r['spec']} | {r['condition']} | {r['tenure']} | {r['price']}"
-        for r in top_rows
-    )
-
-    effective_recommended_model = (
-        (recommended_model or "").strip() if recommended_in_results else ""
-    )
-
-    _sys = _T[9]
-
-    price_line = "None"
-    if price_min is not None and price_max is not None:
-        price_line = f"{price_min} to {price_max}"
-    elif price_min is not None:
-        price_line = f"min {price_min}"
+    if recommended_model and recommended_in_results:
+        intro = f"Here are the available options for {recommended_model.replace('-', ' ').title()}:"
+    elif price_min is not None and price_max is not None:
+        intro = f"Here are options in your budget range (RM{int(price_min):,}–RM{int(price_max):,}):"
     elif price_max is not None:
-        price_line = f"max {price_max}"
+        intro = f"Here are options under RM{int(price_max):,}:"
+    elif price_min is not None:
+        intro = f"Here are options above RM{int(price_min):,}:"
+    else:
+        intro = "Here are some options that match your request:"
 
-    _spec = (
-        f"{_sys}\n\n"
-        f"Conversation history (if any):\n{history_text or 'None'}\n\n"
-        f"User query: {query}\n"
-        f"recommended_model: {effective_recommended_model or 'None'}\n"
-        f"recommended_in_results: {recommended_in_results}\n"
-        f"price_filter: {price_line}\n"
-        f"Top results (use as alternatives):\n{catalog_snippet or 'None'}"
-    )
+    return intro
 
-    response = client.models.generate_content(model=_AI_MODEL, contents=_spec)
-    text = (response.text or "").strip()
-    return text
+
+def _build_reasons_from_genai(
+    query: str,
+    rows: List[Dict[str, object]],
+) -> Dict[str, str]:
+    return {}
 
 
 def main() -> int:

@@ -223,32 +223,15 @@ def run_faq_lookup(question: str, provider: str, ai_client: Any, openai_client: 
     Compatible with the same shape as _run_store_locator().
     """
     faq_section = _find_relevant_sections(question)
-    _spec = _build_faq_spec(question, faq_section)
+    if not faq_section:
+        return {
+            "reply": (
+                "I'm sorry, I couldn't retrieve the answer right now. "
+                "Please contact us at support@compasia.com or call +60 11-6527 3417."
+            ),
+            "source": "faq",
+        }
 
-    reply = ""
-    try:
-        if (provider or "").lower() == "openai":
-            response = openai_client.chat.completions.create(
-                model=openai_model,
-                messages=[
-                    {"role": "system", "content": "Reply as a friendly CompAsia support agent in plain text."},
-                    {"role": "user", "content": _spec},
-                ],
-            )
-            reply = response.choices[0].message.content.strip()
-        else:
-            response = ai_client.models.generate_content(
-                model=ai_model,
-                contents=_spec,
-            )
-            reply = response.text.strip()
-    except Exception as exc:
-        print("⚠️ FAQ lookup failed:", exc)
-
-    if not reply:
-        reply = (
-            "I'm sorry, I couldn't retrieve the answer right now. "
-            "Please contact us at support@compasia.com or call +60 11-6527 3417."
-        )
-
+    lines = [ln.strip() for ln in faq_section.splitlines() if ln.strip()]
+    reply = "\n".join(lines[:25])
     return {"reply": reply, "source": "faq"}

@@ -13,7 +13,6 @@ from typing import Any, Iterable
 
 import pandas as pd
 from dotenv import load_dotenv
-import google.genai as _ai_client_lib
 from openai import OpenAI as _openai_lib
 from _ai_config import (
     get_primary_key,
@@ -91,37 +90,22 @@ def _get_rec_runtime():
 # ---------------------------------------------------------------------------
 # Helpers (inlined from engine_matching_flask_api.py)
 # ---------------------------------------------------------------------------
+_EMOTION_KEYWORDS: dict[str, list[str]] = {
+    "frustrated": ["frustrated", "frustrating", "angry", "annoyed", "upset", "furious", "ridiculous", "unacceptable"],
+    "worried":    ["worried", "concern", "anxious", "afraid", "scared", "nervous", "panic"],
+    "confused":   ["confused", "unclear", "don't understand", "dont understand", "not sure", "what do you mean", "confusing"],
+    "sad":        ["sad", "disappointed", "unhappy", "unfortunate", "terrible", "horrible", "awful"],
+}
+
+
 def _detect_emotion(text: str, provider: str) -> str:
-    cleaned = re.sub(r"\s+", " ", text).strip()
+    cleaned = re.sub(r"\s+", " ", text).strip().lower()
     if not cleaned:
         return ""
-
-    _ctx = _T[8].replace("{text}", cleaned)
-
-    try:
-        provider_name = (provider or "").lower() or os.getenv("MODEL_PROVIDER", PROVIDER_PRIMARY).lower()
-        if provider_name == PROVIDER_TRANSLATION:
-            client = _openai_lib(api_key=get_translation_key())
-            response = client.chat.completions.create(
-                model=TRANSLATION_MODEL,
-                messages=[
-                    {"role": "system", "content": "Return only JSON with an 'emotion' field."},
-                    {"role": "user", "content": _ctx},
-                ],
-                response_format={"type": "json_object"},
-            )
-            content = response.choices[0].message.content
-        else:
-            _svc = _ai_client_lib.Client(api_key=get_primary_key())
-            response = _svc.models.generate_content(model=PRIMARY_MODEL, contents=_ctx)
-            content = response.text
-
-        emotion = str(json.loads(content).get("emotion", "")).lower()
-    except Exception as exc:
-        print("⚠️ Emotion detection failed:", exc)
-        return ""
-
-    return emotion if emotion in {"frustrated", "worried", "confused", "sad"} else ""
+    for emotion, keywords in _EMOTION_KEYWORDS.items():
+        if any(kw in cleaned for kw in keywords):
+            return emotion
+    return ""
 
 
 def _history_reply_by_keyword(conversation_history: list[str], current_question: str) -> str | None:
@@ -147,25 +131,7 @@ def _build_redirect_context(user_message: str, product_json: str) -> str:
 
 
 def _generate_response(context: str, provider: str) -> str:
-    provider_name = (provider or "").lower()
-    try:
-        if provider_name == PROVIDER_TRANSLATION:
-            client = _openai_lib(api_key=get_translation_key())
-            resp = client.chat.completions.create(
-                model=TRANSLATION_MODEL,
-                messages=[
-                    {"role": "system", "content": "Reply as a friendly assistant in plain text."},
-                    {"role": "user", "content": context},
-                ],
-            )
-            return resp.choices[0].message.content.strip()
-        else:
-            _svc = _ai_client_lib.Client(api_key=get_primary_key())
-            resp = _svc.models.generate_content(model=PRIMARY_MODEL, contents=context)
-            return resp.text.strip()
-    except Exception as exc:
-        print("⚠️ Response generation failed:", exc)
-        return ""
+    return ""
 
 
 def _run_store_locator(question: str, provider: str) -> dict:
@@ -260,11 +226,10 @@ class LocalEngineClient:
 
         # 3. FAQ fallback — only if KB and store locator both have no answer
         if is_faq_query(question):
-            ai_client       = _ai_client_lib.Client(api_key=get_primary_key())
             translate_client = _openai_lib(api_key=get_translation_key()) if provider.lower() == PROVIDER_TRANSLATION else None
             faq_result = run_faq_lookup(
                 question, provider,
-                ai_client=ai_client,
+                ai_client=None,
                 openai_client=translate_client,
                 ai_model=PRIMARY_MODEL,
                 openai_model=TRANSLATION_MODEL,

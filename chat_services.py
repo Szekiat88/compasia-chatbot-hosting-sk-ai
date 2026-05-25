@@ -24,7 +24,7 @@ import pandas as pd
 import psycopg2
 from dotenv import load_dotenv
 import random
-from google import genai as _gapi
+import re as _re_lang
 
 
 from openai import OpenAI as _openai_lib
@@ -312,18 +312,7 @@ SHORT_ANSWER_THRESHOLD = 400
 
 
 def _rephrase_as_human(raw_answer: str, user_question: str) -> str:
-    client = _get_proc_client()
-    if client is None:
-        return raw_answer
-
-    _spec = _T[15].replace("{user_question}", user_question).replace("{raw_answer}", raw_answer)
-    try:
-        response = client.models.generate_content(model=_CORE, contents=_spec)
-        rephrased = (response.text or "").strip()
-        return rephrased or raw_answer
-    except Exception as exc:
-        print(f"Rephrase failed: {exc}")
-        return raw_answer
+    return raw_answer
 
 
 def _prepend_consoling_message(answer: str, user_input: str, provider: str) -> str:
@@ -337,69 +326,30 @@ def _prepend_consoling_message(answer: str, user_input: str, provider: str) -> s
 
 
 def _get_proc_client():
-    global _proc_client
-    with _proc_lock:
-        if _proc_client is not None:
-            return _proc_client
-        api_key = get_primary_key()
-        if not api_key:
-            return None
-        _proc_client = _gapi.Client(api_key=api_key)
-        return _proc_client
+    return None
+
+
+_MS_TOKENS = {"saya", "nak", "boleh", "berapa", "ada", "tak", "tidak", "dengan",
+              "untuk", "yang", "dan", "ini", "itu", "ke", "di", "dari", "beli",
+              "harga", "stok", "kedai", "produk", "telefon"}
+
+_ZH_RANGE = (0x4E00, 0x9FFF)
 
 
 def _detect_user_language_code(text: str) -> str:
     user_text = str(text or "").strip()
     if not user_text:
         return "en"
-
-    client = _get_proc_client()
-    if client is None:
-        return "en"
-
-    _spec = (
-        "Detect the language of this user message. "
-        "Return only a 2-letter ISO 639-1 code in lowercase (examples: en, ms, id, zh, ta). "
-        "If mixed, return the dominant language.\n\n"
-        f"Message: {user_text}"
-    )
-    try:
-        response = client.models.generate_content(model=_CORE, contents=_spec)
-        text_response = (response.text or "").strip().lower()
-        match = re.search(r"\b[a-z]{2}\b", text_response)
-        if match:
-            return match.group(0)
-    except Exception as exc:
-        print("Language detection failed:", exc)
+    if any(ord(c) >= _ZH_RANGE[0] and ord(c) <= _ZH_RANGE[1] for c in user_text):
+        return "zh"
+    tokens = set(_re_lang.findall(r"[a-zA-Z]+", user_text.lower()))
+    if len(tokens & _MS_TOKENS) >= 2:
+        return "ms"
     return "en"
 
 
 def _translate_text_to_language(text: str, target_language_code: str) -> str:
-    source_text = str(text or "")
-    target = str(target_language_code or "").strip().lower()
-    if not source_text or not target or target == "en":
-        return source_text
-
-    client = _get_proc_client()
-    if client is None:
-        return source_text
-
-    _spec = (
-        "Translate the following customer support response into the target language.\n"
-        f"Target language code: {target}\n"
-        "Rules:\n"
-        "- Preserve URLs, product names, model numbers, ticket IDs, and formatting/new lines.\n"
-        "- Keep the meaning unchanged.\n"
-        "- Return only the translated response text.\n\n"
-        f"Response:\n{source_text}"
-    )
-    try:
-        response = client.models.generate_content(model=_CORE, contents=_spec)
-        translated = (response.text or "").strip()
-        return translated or source_text
-    except Exception as exc:
-        print("Response translation failed:", exc)
-        return source_text
+    return str(text or "")
 
 
 # ------------------------------------------------------
@@ -436,11 +386,10 @@ def _run_engine_match_pipeline(
             }
 
     if is_faq_query(question):
-        _ai = _gapi.Client(api_key=get_primary_key())
         _oa = _openai_lib(api_key=get_translation_key()) if provider.lower() == PROVIDER_TRANSLATION else None
         faq_result = run_faq_lookup(
             question, provider,
-            ai_client=_ai,
+            ai_client=None,
             openai_client=_oa,
             ai_model=PRIMARY_MODEL,
             openai_model=TRANSLATION_MODEL,
