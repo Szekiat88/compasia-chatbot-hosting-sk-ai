@@ -411,6 +411,20 @@ def _run_engine_match_pipeline(
     conversation_summary: str,
 ) -> dict:
     """Run intent classification then fall back to store locator and FAQ when needed."""
+    from store_locator import is_location_query
+
+    # Always check store locator FIRST so queries like "nearest store in KL"
+    # are never intercepted by a KB entry.
+    if is_location_query(question):
+        store_result = _run_store_locator(question, provider)
+        match_key = "STORE_LOCATOR_NEEDS_LOCATION" if store_result["needs_location"] else "STORE_LOCATOR"
+        store_reply = store_result.get("reply", "")
+        return {
+            "match": match_key,
+            "score": 1.0,
+            "matched_row": {"keyword": match_key, "answer": store_reply},
+        }
+
     df = _get_knowledge_df()
     match, score, matched_row_raw = engine_match(
         user_question=question,
@@ -422,18 +436,6 @@ def _run_engine_match_pipeline(
     if match != "NO_MATCH":
         payload = matched_row_raw.to_dict() if isinstance(matched_row_raw, pd.Series) else matched_row_raw
         return {"match": match, "score": score, "matched_row": payload}
-
-    if _run_store_locator is not None:
-        from store_locator import is_location_query
-        if is_location_query(question):
-            store_result = _run_store_locator(question, provider)
-            match_key = "STORE_LOCATOR_NEEDS_LOCATION" if store_result["needs_location"] else "STORE_LOCATOR"
-            store_reply = store_result.get("reply", "")
-            return {
-                "match": match_key,
-                "score": 1.0,
-                "matched_row": {"keyword": match_key, "answer": store_reply},
-            }
 
     if is_faq_query(question):
         _ai = _gapi.Client(api_key=get_primary_key())
@@ -842,6 +844,11 @@ def search(
                 "Sorry, I couldn't process your product inquiry. Please try again.",
                 confidence="low",
             )
+
+    if match in ("STORE_LOCATOR", "STORE_LOCATOR_NEEDS_LOCATION"):
+        log.debug("Intent: %s — returning store reply directly", match)
+        store_reply = (matched_row or {}).get("answer", "")
+        return make_response(store_reply, raw_response=True)
 
     if matched_row is None:
         log.warning("No matched_row — trying local fallback for keyword: %s", match)

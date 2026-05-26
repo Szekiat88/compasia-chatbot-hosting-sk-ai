@@ -189,13 +189,16 @@ def _run_store_locator(question: str, provider: str) -> dict:
         )
         return {"needs_location": False, "stores": [], "closed_stores": [], "reply": reply, "language": language, "location_detected": location_term}
 
-    _spec = _build_store_spec(question, active, language)
-    reply = _generate_response(_spec, provider)
-    if not reply:
-        reply = "\n\n".join(
-            f"📍 {s['name']}\n🏢 {s['location']}\n🕐 {s['operatingHours']}\n💬 {s['whatsappLink']}"
-            for s in active[:5]
-        )
+    display = active[:5]
+    header = (
+        "Berikut adalah kedai CompAsia berhampiran anda:\n\n"
+        if language == "ms"
+        else "Here are the nearest CompAsia stores near you:\n\n"
+    )
+    reply = header + "\n\n".join(
+        f"📍 *{s['name']}*\n🏢 {s['location']}\n🕐 {s['operatingHours']}\n💬 {s['whatsappLink']}"
+        for s in display
+    )
 
     return {"needs_location": False, "stores": active, "closed_stores": closed, "reply": reply,
             "language": language, "location_detected": location_term}
