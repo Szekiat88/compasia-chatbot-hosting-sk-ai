@@ -53,6 +53,7 @@ from ai_pipeline import (
     ConversationMemory,
     RAGKnowledgeBase,
 )
+from marketplace_tracker import extract_medusa_order_id, get_marketplace_order_detail
 from shopify_tracker import get_order_detail
 from zoho_ticket_creation import (
     DEPT_GENERAL,
@@ -774,6 +775,13 @@ def search(
     log.debug("Extracting customer details / order ID...")
     details = _extract_customer_details(user_text)
     cam_order_id = _extract_cam_order_id(user_text)
+    medusa_order_id = extract_medusa_order_id(user_text)
+
+    # Marketplace (Medusa.js) order lookup — order IDs start with "order_"
+    if medusa_order_id:
+        log.debug("Marketplace order ID found: %s", medusa_order_id)
+        order_reply = get_marketplace_order_detail(medusa_order_id)
+        return make_response(order_reply, raw_response=True)
 
     if details or cam_order_id:
         order_id = (details or {}).get("order_id") or cam_order_id
