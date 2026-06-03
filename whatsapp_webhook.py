@@ -21,10 +21,12 @@ from flask import Flask, jsonify, request
 from db_log_handler import DBLogHandler, setup_db_logging
 from chat_api import run_search
 from chat_services import create_conversation_record, ensure_customer_record, store_error_record
+from product_webhook import marketplace_bp
 
 load_dotenv()
 
 app = Flask(__name__)
+app.register_blueprint(marketplace_bp)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 setup_db_logging()
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -316,6 +318,13 @@ def build_brain_reply(sender: str, profile_name: str | None, text: str) -> tuple
         provider=os.getenv("MODEL_PROVIDER", PROVIDER_PRIMARY),
         conversation_id=state.conversation_id,
     )
+    if "marketplace_order_id" in result and not result.get("marketplace_found"):
+        logger.warning(
+            "marketplace_order_not_found sender=%s order_id=%s reason=%s",
+            sender,
+            result["marketplace_order_id"],
+            result.get("marketplace_failure_reason", "unknown"),
+        )
     answer = str(result.get("answer") or "Sorry, I could not find an answer right now.")
     new_summary = result.get("conversation_summary")
     if isinstance(new_summary, str):

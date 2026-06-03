@@ -11,11 +11,14 @@ Requires the SSM tunnel on port 5421:
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from pathlib import Path
 
 import psycopg2
+
+logger = logging.getLogger("marketplace_tracker")
 
 BASE_DIR = Path(__file__).parent
 _ENV_FILE = BASE_DIR / "db_new.env"
@@ -41,8 +44,8 @@ def _load_env_file() -> dict[str, str]:
 def _get_db_config() -> dict:
     env = _load_env_file()
     return dict(
-        host=os.getenv("NEW_DB_HOST") or env.get("NEW_DB_HOST", "localhost"),
-        port=int(os.getenv("NEW_DB_PORT") or env.get("NEW_DB_PORT", "5421")),
+        host=os.getenv("NEW_DB_HOST") or env.get("NEW_DB_HOST"),
+        port=int(os.getenv("NEW_DB_PORT") or env.get("NEW_DB_PORT")),
         dbname=os.getenv("NEW_DB_NAME") or env.get("NEW_DB_NAME", "marketplace_mercur_uat"),
         user=os.getenv("NEW_DB_USER") or env.get("NEW_DB_USER", "ai_chatbot_app"),
         password=os.getenv("NEW_DB_PASSWORD") or env.get("NEW_DB_PASSWORD", ""),
@@ -62,8 +65,11 @@ def get_marketplace_order(order_id: str) -> dict | None:
     Returns a dict with keys: order_id, tracking_number, tracking_url, order_status.
     Returns None if not found or DB unreachable.
     """
+    cfg = _get_db_config()
+    logger.info("marketplace_order_lookup order_id=%s host=%s port=%s db=%s user=%s",
+                order_id, cfg["host"], cfg["port"], cfg["dbname"], cfg["user"])
     try:
-        conn = psycopg2.connect(**_get_db_config())
+        conn = psycopg2.connect(**cfg)
         cur = conn.cursor()
         cur.execute(
             """
@@ -77,7 +83,9 @@ def get_marketplace_order(order_id: str) -> dict | None:
         row = cur.fetchone()
         conn.close()
         if not row:
+            logger.warning("marketplace_order_not_found order_id=%s", order_id)
             return None
+        logger.info("marketplace_order_found order_id=%s status=%s", order_id, row[3])
         return {
             "order_id": row[0],
             "tracking_number": row[1],
@@ -85,7 +93,7 @@ def get_marketplace_order(order_id: str) -> dict | None:
             "order_status": row[3],
         }
     except Exception as exc:
-        print(f"[marketplace_tracker] DB error: {exc}")
+        logger.error("marketplace_order_db_error order_id=%s error=%s", order_id, exc)
         return None
 
 

@@ -53,7 +53,12 @@ from ai_pipeline import (
     ConversationMemory,
     RAGKnowledgeBase,
 )
-from marketplace_tracker import extract_medusa_order_id, get_marketplace_order_detail
+from marketplace_tracker import (
+    extract_medusa_order_id,
+    get_marketplace_order,
+    format_marketplace_order,
+    get_marketplace_order_detail,
+)
 from shopify_tracker import get_order_detail
 from zoho_ticket_creation import (
     DEPT_GENERAL,
@@ -779,9 +784,24 @@ def search(
 
     # Marketplace (Medusa.js) order lookup — order IDs start with "order_"
     if medusa_order_id:
-        log.debug("Marketplace order ID found: %s", medusa_order_id)
-        order_reply = get_marketplace_order_detail(medusa_order_id)
-        return make_response(order_reply, raw_response=True)
+        log.info("marketplace_lookup_triggered order_id=%s user_text=%r", medusa_order_id, user_text)
+        marketplace_order, lookup_failure_reason = get_marketplace_order(medusa_order_id)
+        log.debug("Marketplace order lookup result for %s: %s (reason: %s)", medusa_order_id, marketplace_order, lookup_failure_reason)
+        if marketplace_order is None:
+            log.warning("marketplace_order_not_found order_id=%s reason=%s", medusa_order_id, lookup_failure_reason)
+            if conversation_id:
+                store_error_record(
+                    conversation_id,
+                    str(user_question),
+                    f"Marketplace order not found: {medusa_order_id} reason={lookup_failure_reason}",
+                )
+        order_reply = format_marketplace_order(marketplace_order)
+        log.info("marketplace_lookup_result order_id=%s found=%s", medusa_order_id, marketplace_order is not None)
+        result = make_response(order_reply, raw_response=True)
+        result["marketplace_order_id"] = medusa_order_id
+        result["marketplace_found"] = marketplace_order is not None
+        result["marketplace_failure_reason"] = lookup_failure_reason
+        return result
 
     if details or cam_order_id:
         order_id = (details or {}).get("order_id") or cam_order_id

@@ -10,15 +10,16 @@ import psycopg2
 from conversation_ids import _get_db_config
 
 _TABLE_READY = False
+_TABLE_FAILED = False
 _TABLE_LOCK = threading.Lock()
 
 
 def _ensure_log_table() -> None:
-    global _TABLE_READY
-    if _TABLE_READY:
+    global _TABLE_READY, _TABLE_FAILED
+    if _TABLE_READY or _TABLE_FAILED:
         return
     with _TABLE_LOCK:
-        if _TABLE_READY:
+        if _TABLE_READY or _TABLE_FAILED:
             return
         try:
             conn = psycopg2.connect(**_get_db_config())
@@ -40,7 +41,8 @@ def _ensure_log_table() -> None:
             conn.close()
             _TABLE_READY = True
         except Exception as exc:
-            print(f"[db_log_handler] could not create webhook_log table: {exc}", file=sys.stderr)
+            _TABLE_FAILED = True
+            print(f"[db_log_handler] DB logging disabled — could not connect: {exc}", file=sys.stderr)
 
 
 class DBLogHandler(logging.Handler):
@@ -59,7 +61,7 @@ class DBLogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         _ensure_log_table()
-        if not _TABLE_READY:
+        if not _TABLE_READY or _TABLE_FAILED:
             return
         sender = getattr(self._context, "sender", None)
         try:
