@@ -245,6 +245,18 @@ class LocalEngineClient:
         else:
             matched_payload = matched_row
 
+        if match == "STORE_LOCATOR":
+            store_result = _run_store_locator(question, provider)
+            match_key = "STORE_LOCATOR_NEEDS_LOCATION" if store_result["needs_location"] else "STORE_LOCATOR"
+            store_reply = store_result.get("reply", "")
+            return {
+                "match": match_key,
+                "score": score,
+                "matched_row": {"keyword": match_key, "answer": store_reply},
+                "reply": store_reply,
+                "store_locator": store_result,
+            }
+
         if match != "NO_MATCH":
             return {"match": match, "score": score, "matched_row": matched_payload}
 

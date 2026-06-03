@@ -140,8 +140,11 @@ _STRONG_LOCATION_SIGNALS = {
 
 # Two weak signals together also flag it
 _WEAK_LOCATION_SIGNALS = {
-    "where", "store", "shop", "location", "find", "pergi", "visit", "lokasi",
+    "where", "store", "stores", "shop", "shops", "location", "find", "pergi", "visit", "lokasi",
 }
+
+# Store-presence words: when combined with a detected location, flag as store query
+_STORE_PRESENCE_WORDS = {"store", "stores", "shop", "shops", "outlet", "outlets", "branch", "kedai"}
 
 _stores_df: pd.DataFrame | None = None
 
@@ -245,6 +248,9 @@ def is_location_query(text: str) -> bool:
     - Short follow-up reply (≤ 6 words) that contains a known location name,
       e.g. user replies "Penang" or "I'm in Subang Jaya" after being asked
       for their area.
+    - Any store-presence word (store/stores/shop/shops/outlet/kedai) combined
+      with a known location name, regardless of message length, e.g.
+      "do you have any stores in PJ?".
     """
     tokens = set(re.findall(r"[a-zA-Z]+", text.lower()))
     if tokens & _STRONG_LOCATION_SIGNALS:
@@ -252,5 +258,8 @@ def is_location_query(text: str) -> bool:
     if len(tokens & _WEAK_LOCATION_SIGNALS) >= 2:
         return True
     if len(tokens) <= 6 and detect_location(text) is not None:
+        return True
+    # "stores/shops in [location]" pattern — catches plural/variant store words
+    if tokens & _STORE_PRESENCE_WORDS and detect_location(text) is not None:
         return True
     return False

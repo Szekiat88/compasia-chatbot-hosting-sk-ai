@@ -439,6 +439,16 @@ def _run_engine_match_pipeline(
         conversation_summary=conversation_summary,
     )
 
+    if match == "STORE_LOCATOR":
+        store_result = _run_store_locator(question, provider)
+        match_key = "STORE_LOCATOR_NEEDS_LOCATION" if store_result["needs_location"] else "STORE_LOCATOR"
+        store_reply = store_result.get("reply", "")
+        return {
+            "match": match_key,
+            "score": score,
+            "matched_row": {"keyword": match_key, "answer": store_reply},
+        }
+
     if match != "NO_MATCH":
         payload = matched_row_raw.to_dict() if isinstance(matched_row_raw, pd.Series) else matched_row_raw
         return {"match": match, "score": score, "matched_row": payload}
