@@ -21,7 +21,7 @@ from semantic_search import (
 
 TOP_K = 3
 CANDIDATE_K = 50
-SHOP_DOMAIN = os.getenv("SHOP_DOMAIN", "compasia.my")
+SHOP_DOMAIN = os.getenv("SHOP_DOMAIN", "my-project-ultra-storefront-uat-t6kp.compasia.my")
 
 
 def _normalize_domain(shop_domain: str) -> str:
