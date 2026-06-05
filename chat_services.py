@@ -55,6 +55,7 @@ from ai_pipeline import (
 )
 from marketplace_tracker import (
     extract_medusa_order_id,
+    extract_cam_order_id,
     get_marketplace_order,
     format_marketplace_order,
     get_marketplace_order_detail,
@@ -543,14 +544,6 @@ def _extract_customer_details(text: str) -> dict[str, str] | None:
     return details or None
 
 
-def _extract_cam_order_id(text: str) -> str | None:
-    """Extract a free-form Shopify order reference like CAM7765 or #CAM7765."""
-
-    match = re.search(r"(?<![A-Z0-9])#?(CAM[0-9A-Z-]+)\b", str(text), flags=re.IGNORECASE)
-    if not match:
-        return None
-    return match.group(1).upper()
-
 
 def _normalize_keyword_text(value: str) -> str:
     normalized = (value or "").lower()
@@ -789,50 +782,28 @@ def search(
 
     log.debug("Extracting customer details / order ID...")
     details = _extract_customer_details(user_text)
-    cam_order_id = _extract_cam_order_id(user_text)
-    medusa_order_id = extract_medusa_order_id(user_text)
-
-    # Marketplace (Medusa.js) order lookup — order IDs start with "order_"
-    if medusa_order_id:
-        log.info("marketplace_lookup_triggered order_id=%s user_text=%r", medusa_order_id, user_text)
-        marketplace_order, lookup_failure_reason = get_marketplace_order(medusa_order_id)
-        log.debug("Marketplace order lookup result for %s: %s (reason: %s)", medusa_order_id, marketplace_order, lookup_failure_reason)
-        if marketplace_order is None:
-            log.warning("marketplace_order_not_found order_id=%s reason=%s", medusa_order_id, lookup_failure_reason)
-            if conversation_id:
-                store_error_record(
-                    conversation_id,
-                    str(user_question),
-                    f"Marketplace order not found: {medusa_order_id} reason={lookup_failure_reason}",
-                )
-        order_reply = format_marketplace_order(marketplace_order)
-        log.info("marketplace_lookup_result order_id=%s found=%s", medusa_order_id, marketplace_order is not None)
-        result = make_response(order_reply, raw_response=True)
-        result["marketplace_order_id"] = medusa_order_id
-        result["marketplace_found"] = marketplace_order is not None
-        result["marketplace_failure_reason"] = lookup_failure_reason
-        return result
-
-    if details or cam_order_id:
+    cam_order_id = extract_cam_order_id(user_text)
+    
+    if cam_order_id:
         order_id = (details or {}).get("order_id") or cam_order_id
         log.debug("Order ID found: %s", order_id)
         if order_id:
-            log.info("marketplace_lookup_triggered order_id=%s user_text=%r", order_id, user_text)
-            marketplace_order, lookup_failure_reason = get_marketplace_order(order_id)
-            log.info("marketplace_lookup_result order_id=%s found=%s", order_id, marketplace_order is not None)
-            if marketplace_order is None:
-                log.warning("marketplace_order_not_found order_id=%s reason=%s", order_id, lookup_failure_reason)
+            log.info("cam_lookup_triggered order_id=%s user_text=%r", order_id, user_text)
+            marketplace_order = get_marketplace_order(order_id)
+            found = marketplace_order is not None
+            log.info("marketplace_lookup_result order_id=%s found=%s", order_id, found)
+            if not found:
+                log.warning("marketplace_order_not_found order_id=%s", order_id)
                 if conversation_id:
                     store_error_record(
                         conversation_id,
                         str(user_question),
-                        f"Marketplace order not found: {order_id} reason={lookup_failure_reason}",
+                        f"Marketplace order not found: {order_id}",
                     )
             order_reply = format_marketplace_order(marketplace_order)
             result = make_response(order_reply, raw_response=True)
             result["marketplace_order_id"] = order_id
-            result["marketplace_found"] = marketplace_order is not None
-            result["marketplace_failure_reason"] = lookup_failure_reason
+            result["marketplace_found"] = found
             return result
         return make_response(json.dumps(details), raw_response=True)
 

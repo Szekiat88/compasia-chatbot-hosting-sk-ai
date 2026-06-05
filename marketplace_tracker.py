@@ -23,8 +23,9 @@ logger = logging.getLogger("marketplace_tracker")
 BASE_DIR = Path(__file__).parent
 _ENV_FILE = BASE_DIR / "db_new.env"
 
-# Medusa.js order ID pattern: order_<26-char ULID>
-_MEDUSA_ORDER_RE = re.compile(r"\border_[0-9A-Za-z]{26}\b")
+
+# CAM order ID pattern: CAM followed by alphanumeric characters (e.g. CAMY575, CAM1234)
+_CAM_ORDER_RE = re.compile(r"(?<![A-Z0-9])#?(CAM[0-9A-Z-]+)\b", re.IGNORECASE)
 
 
 def _load_env_file() -> dict[str, str]:
@@ -54,9 +55,15 @@ def _get_db_config() -> dict:
 
 
 def extract_medusa_order_id(text: str) -> str | None:
-    """Return the first Medusa order ID found in text, or None."""
+    """Return the first Medusa order ID (order_XXXX) found in text, or None."""
     match = _MEDUSA_ORDER_RE.search(str(text))
     return match.group(0) if match else None
+
+
+def extract_cam_order_id(text: str) -> str | None:
+    """Return the first CAM order ID (e.g. CAMY575, CAM1234) found in text, or None."""
+    match = _CAM_ORDER_RE.search(str(text))
+    return match.group(1).upper() if match else None
 
 
 def get_marketplace_order(order_id: str) -> dict | None:
@@ -73,9 +80,9 @@ def get_marketplace_order(order_id: str) -> dict | None:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT order_id, tracking_number, tracking_url, order_status
+            SELECT custom_display_id, tracking_number, tracking_url, order_status
             FROM ai_chatbot_order_tracking_status
-            WHERE order_id = %s
+            WHERE custom_display_id = %s
             LIMIT 1
             """,
             (order_id,),
