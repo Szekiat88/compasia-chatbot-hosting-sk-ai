@@ -211,9 +211,9 @@ INSERT INTO marketplace_variant (
     available_qty, is_available
 )
 VALUES %s
-ON CONFLICT (product_id, variant_id) DO UPDATE SET
+ON CONFLICT (src_variant_id) WHERE src_variant_id IS NOT NULL DO UPDATE SET
+    product_id      = EXCLUDED.product_id,
     src_product_id  = EXCLUDED.src_product_id,
-    src_variant_id  = EXCLUDED.src_variant_id,
     handle          = EXCLUDED.handle,
     vendor          = EXCLUDED.vendor,
     product_type    = EXCLUDED.product_type,
@@ -306,9 +306,9 @@ def product_updated():
 
     try:
         rows = _parse_product(product)
-    except Exception:
+    except Exception as e:
         logger.exception("product_webhook parse_error product_id=%s", src_product_id)
-        return jsonify({"error": "payload parse error"}), 422
+        return jsonify({"error": "payload parse error", "detail": str(e)}), 422
 
     if not rows:
         logger.info("product_webhook no_active_variants product_id=%s", src_product_id)
@@ -316,9 +316,9 @@ def product_updated():
 
     try:
         count = _upsert(rows)
-    except psycopg2.Error:
+    except Exception as e:
         logger.exception("product_webhook db_error product_id=%s", src_product_id)
-        return jsonify({"error": "database error"}), 500
+        return jsonify({"error": "database error", "detail": str(e)}), 500
 
     logger.info("product_webhook upserted=%d product_id=%s", count, src_product_id)
 

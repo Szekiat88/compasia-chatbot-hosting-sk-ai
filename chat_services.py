@@ -817,23 +817,23 @@ def search(
         order_id = (details or {}).get("order_id") or cam_order_id
         log.debug("Order ID found: %s", order_id)
         if order_id:
-            try:
-                order_reply = get_order_detail(order_id)
-            except RuntimeError as exc:
-                # No order returned from Shopify; provide a friendly reply instead of crashing.
-                return make_response(
-                    f"Sorry, I couldn't find order {order_id}. Please check the order ID and try again.",
-                    confidence="low",
-                    raw_response=True,
-                )
-            except Exception as exc:
-                print(f"Order lookup failed for {order_id}: {exc}")
-                return make_response(
-                    "Sorry, I had trouble retrieving your order just now. Please try again shortly.",
-                    confidence="low",
-                    raw_response=True,
-                )
-            return make_response(order_reply, raw_response=True)
+            log.info("marketplace_lookup_triggered order_id=%s user_text=%r", order_id, user_text)
+            marketplace_order, lookup_failure_reason = get_marketplace_order(order_id)
+            log.info("marketplace_lookup_result order_id=%s found=%s", order_id, marketplace_order is not None)
+            if marketplace_order is None:
+                log.warning("marketplace_order_not_found order_id=%s reason=%s", order_id, lookup_failure_reason)
+                if conversation_id:
+                    store_error_record(
+                        conversation_id,
+                        str(user_question),
+                        f"Marketplace order not found: {order_id} reason={lookup_failure_reason}",
+                    )
+            order_reply = format_marketplace_order(marketplace_order)
+            result = make_response(order_reply, raw_response=True)
+            result["marketplace_order_id"] = order_id
+            result["marketplace_found"] = marketplace_order is not None
+            result["marketplace_failure_reason"] = lookup_failure_reason
+            return result
         return make_response(json.dumps(details), raw_response=True)
 
     log.debug("Checking escalation...")
