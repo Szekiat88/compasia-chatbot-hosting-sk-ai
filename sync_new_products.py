@@ -2,31 +2,22 @@
 Sync products from the new Medusa.js marketplace DB into the FAISS chatbot DB.
 
 Usage:
-    python sync_new_products.py [--dry-run] [--rebuild-index]
+    python sync_new_products.py [--dry-run] [--rebuild-index] [--full]
 
 What it does:
-    1. Connects to marketplace_mercur_uat (new product DB via SSM tunnel :5421)
-    2. Extracts all published, non-deleted products + variants with:
-         - handle, vendor, product_type, color, spec, condition, price, tenure
-         - correct availability flag (respects manage_inventory + allow_backorder)
-    3. Upserts into marketplace_variant table in ai-grading-uat (FAISS DB :5431)
-    4. Optionally rebuilds the FAISS semantic search index
+    1. Connects to marketplace_mercur_uat (new product DB)
+    2. Queries vw_changed_variants (pre-created on the source DB) to find
+       products/variants changed in the last 12 hours. Use --full to bypass.
+    3. Removes variants that are deleted/unpublished in the change window.
+    4. Upserts changed rows into marketplace_variant table (FAISS DB)
+    5. Optionally rebuilds the FAISS semantic search index (skipped when no changes)
 
-Availability rules (per user spec):
+Availability rules:
     - deleted_at IS NULL applied everywhere
     - product.status = 'published' only
-    - available_qty = stocked_quantity - reserved_quantity (can be negative)
     - manage_inventory = TRUE + qty > 0   → available
     - allow_backorder  = TRUE + qty <= 0  → available (backorder)
     - all other cases                     → not available
-
-Requires SSM tunnels:
-    New DB (port 5421):
-        aws ssm start-session --region ap-southeast-5 --target i-046d2ea75fdd7997d
-          --document-name AWS-StartPortForwardingSessionToRemoteHost
-          --parameters '{"portNumber":["5432"],"localPortNumber":["5421"],
-            "host":["my-compasia-uat-marketplace.c5saoe4641k5.ap-southeast-5.rds.amazonaws.com"]}'
-          --profile marketplace
 """
 
 from __future__ import annotations
@@ -56,6 +47,26 @@ NEW_DB = dict(
 
 FAISS_DB_ENV = "db.env"
 
+# vw_changed_variants is pre-created on marketplace_mercur_uat via
+# deploy/create_changed_view.sql — no need to recreate it here.
+# JOIN added to EXTRACT_SQL in incremental mode — restricts to view rows only.
+INCREMENTAL_JOIN = """INNER JOIN vw_changed_variants cv
+    ON cv.src_product_id = p.id
+   AND cv.src_variant_id = pv.id"""
+
+# Variants that appeared in the change window but are now deleted/unpublished
+# → must be removed from marketplace_variant.
+DELETED_VARIANTS_SQL = """
+SELECT DISTINCT
+    abs(('x' || substr(md5(cv.src_product_id), 1, 15))::bit(60)::bigint) AS product_id,
+    abs(('x' || substr(md5(cv.src_variant_id), 1, 15))::bit(60)::bigint) AS variant_id
+FROM vw_changed_variants cv
+JOIN product p  ON p.id  = cv.src_product_id
+JOIN product_variant pv ON pv.id = cv.src_variant_id
+WHERE p.deleted_at  IS NOT NULL
+   OR pv.deleted_at IS NOT NULL
+   OR p.status != 'published'
+"""
 
 # ---------------------------------------------------------------------------
 # Extraction SQL — runs on marketplace_mercur_uat
@@ -168,6 +179,8 @@ LEFT JOIN inventory_level il
 INNER JOIN latest_price lp
     ON lp.variant_id = pv.id
    AND lp.rn         = 1
+
+{changed_join}
 
 WHERE p.deleted_at IS NULL
   AND p.status      = 'published'
@@ -287,10 +300,19 @@ def get_faiss_db_conn():
         sys.exit(1)
 
 
-def extract_rows(conn) -> List[Dict[str, Any]]:
+def extract_rows(conn, incremental: bool = True) -> List[Dict[str, Any]]:
+    changed_join = INCREMENTAL_JOIN if incremental else ""
+    sql = EXTRACT_SQL.format(changed_join=changed_join)
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(EXTRACT_SQL)
+        cur.execute(sql)
         return [dict(r) for r in cur.fetchall()]
+
+
+def extract_deleted_variants(conn) -> List[tuple]:
+    """Return (product_id, variant_id) pairs that are deleted/unpublished in the last 12 hours."""
+    with conn.cursor() as cur:
+        cur.execute(DELETED_VARIANTS_SQL)
+        return cur.fetchall()
 
 
 def to_tuple(r: Dict[str, Any]):
@@ -342,6 +364,19 @@ def upsert_rows(conn, rows: List[Dict[str, Any]]) -> int:
     return len(tuples)
 
 
+def delete_rows(conn, deleted: List[tuple]) -> int:
+    """Delete variants from marketplace_variant that were soft-deleted in source."""
+    if not deleted:
+        return 0
+    with conn.cursor() as cur:
+        cur.executemany(
+            "DELETE FROM marketplace_variant WHERE product_id = %s AND variant_id = %s",
+            deleted,
+        )
+    conn.commit()
+    return len(deleted)
+
+
 def print_preview(rows: List[Dict[str, Any]], limit: int = 10) -> None:
     avail = sum(1 for r in rows if r.get("is_available"))
     print(f"\n  Total rows: {len(rows)} | Available variants: {avail}")
@@ -369,37 +404,51 @@ def main() -> int:
                         help="Preview rows without writing to FAISS DB")
     parser.add_argument("--rebuild-index", action="store_true",
                         help="Rebuild FAISS index after syncing")
+    parser.add_argument("--full", action="store_true",
+                        help="Sync all products (default: only rows changed in last 12 hours)")
     args = parser.parse_args()
 
+    incremental = not args.full
+    mode_label = "FULL" if args.full else "INCREMENTAL (last 12 hours)"
+
     print("=" * 60)
-    print("  Marketplace → FAISS DB Product Sync")
+    print(f"  Marketplace → FAISS DB Product Sync  [{mode_label}]")
     print("=" * 60)
 
-    print("\n[1/3] Connecting to marketplace DB (port 5421)...")
+    print("\n[1/3] Connecting to marketplace DB...")
     new_conn = get_new_db_conn()
     print("  Connected.")
 
-    print("\n[2/3] Extracting products from marketplace DB...")
-    rows = extract_rows(new_conn)
+    print("\n[2/3] Extracting changed products from marketplace DB...")
+    rows = extract_rows(new_conn, incremental=incremental)
+    deleted = extract_deleted_variants(new_conn) if incremental else []
     new_conn.close()
-    print(f"  Extracted {len(rows)} variant rows.")
+    print(f"  Changed variants to upsert : {len(rows)}")
+    print(f"  Deleted variants to remove : {len(deleted)}")
 
-    if not rows:
-        print("  No published products found.")
+    if not rows and not deleted:
+        print("\n  No changes detected in the last 12 hours — skipping DB update and index rebuild.")
         return 0
 
-    print_preview(rows, limit=15)
+    if rows:
+        print_preview(rows, limit=15)
 
     if args.dry_run:
         print("\n  [DRY RUN] Nothing written. Remove --dry-run to sync.")
         return 0
 
-    print("\n[3/3] Upserting into marketplace_variant (FAISS DB @ port 5431)...")
+    print("\n[3/3] Applying changes to marketplace_variant (FAISS DB)...")
     faiss_conn = get_faiss_db_conn()
     ensure_table(faiss_conn)
-    count = upsert_rows(faiss_conn, rows)
+
+    upserted = upsert_rows(faiss_conn, rows) if rows else 0
+    removed = delete_rows(faiss_conn, deleted)
     faiss_conn.close()
-    print(f"  Upserted {count} rows into marketplace_variant.")
+
+    if upserted:
+        print(f"  Upserted {upserted} rows into marketplace_variant.")
+    if removed:
+        print(f"  Deleted  {removed} rows from marketplace_variant.")
 
     if args.rebuild_index:
         print("\n[BONUS] Rebuilding FAISS semantic search index...")

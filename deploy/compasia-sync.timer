@@ -1,0 +1,14 @@
+[Unit]
+Description=Run CompAsia product sync at 06:00 and 18:00 daily
+Requires=compasia-sync.service
+
+[Timer]
+# Fire at 6 AM and 6 PM server time
+OnCalendar=*-*-* 06:00:00
+OnCalendar=*-*-* 18:00:00
+# If the server was down at fire time, run once it comes back up
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

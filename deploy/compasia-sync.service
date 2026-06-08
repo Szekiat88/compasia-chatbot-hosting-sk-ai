@@ -1,0 +1,20 @@
+[Unit]
+Description=CompAsia incremental product sync
+After=network.target postgresql.service
+# Retry once if the DB isn't up yet at boot
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/compasia-chatbot-hosting-sk-ai
+ExecStart=/home/ubuntu/compasia-chatbot-hosting-sk-ai/deploy/run_sync.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=compasia-sync
+# Give the script up to 30 minutes before systemd kills it
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
