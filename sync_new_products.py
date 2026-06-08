@@ -16,9 +16,9 @@ Availability rules (per user spec):
     - deleted_at IS NULL applied everywhere
     - product.status = 'published' only
     - available_qty = stocked_quantity - reserved_quantity (can be negative)
-    - manage_inventory = FALSE → always available (skip stock check)
-    - manage_inventory = TRUE + allow_backorder = TRUE → always available
-    - manage_inventory = TRUE + allow_backorder = FALSE → only if available_qty > 0
+    - manage_inventory = TRUE + qty > 0   → available
+    - allow_backorder  = TRUE + qty <= 0  → available (backorder)
+    - all other cases                     → not available
 
 Requires SSM tunnels:
     New DB (port 5421):
@@ -127,12 +127,11 @@ SELECT
     COALESCE(SUM(il.stocked_quantity - il.reserved_quantity), 0) AS available_qty,
 
     CASE
-        WHEN pv.manage_inventory = FALSE
-            THEN TRUE
-        WHEN pv.manage_inventory = TRUE AND pv.allow_backorder = TRUE
-            THEN TRUE
-        WHEN pv.manage_inventory = TRUE AND pv.allow_backorder = FALSE
+        WHEN pv.manage_inventory = TRUE
              AND COALESCE(SUM(il.stocked_quantity - il.reserved_quantity), 0) > 0
+            THEN TRUE
+        WHEN pv.allow_backorder = TRUE
+             AND COALESCE(SUM(il.stocked_quantity - il.reserved_quantity), 0) <= 0
             THEN TRUE
         ELSE FALSE
     END                                                          AS is_available
@@ -173,14 +172,12 @@ INNER JOIN latest_price lp
 WHERE p.deleted_at IS NULL
   AND p.status      = 'published'
   AND (
-      pv.manage_inventory = FALSE
-      OR (
+      (
           pv.manage_inventory = TRUE
           AND COALESCE(il.stocked_quantity - il.reserved_quantity, 0) > 0
       )
       OR (
-          pv.manage_inventory = TRUE
-          AND pv.allow_backorder = TRUE
+          pv.allow_backorder = TRUE
           AND COALESCE(il.stocked_quantity - il.reserved_quantity, 0) <= 0
       )
   )
