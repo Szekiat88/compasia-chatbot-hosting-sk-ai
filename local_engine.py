@@ -366,7 +366,27 @@ class LocalEngineClient:
             record_map = cache.get("record_map", {})
 
             enhanced_query = f"{question}\n\nContext: {conversation_summary}" if conversation_summary else question
-            search_query, recommended_model, price_min, price_max = build_search_query(enhanced_query, None)
+
+            # Build available_models from the in-memory cache so the AI picks a
+            # model that actually exists in stock rather than relying on its
+            # training-data knowledge (which may lag behind — e.g. iPhone 15 vs 17).
+            all_handles = {
+                str(r.get("handle", "") or "").lower()
+                for r in record_map.values()
+                if r.get("handle")
+            }
+            brand_prefix: str | None = None
+            for brand in ("iphone", "ipad", "macbook", "samsung", "pixel", "oppo", "xiaomi", "huawei"):
+                if brand in question.lower():
+                    brand_prefix = brand
+                    break
+            available_models: list[str] | None = (
+                sorted(h for h in all_handles if h.startswith(brand_prefix))
+                if brand_prefix
+                else None
+            )
+
+            search_query, recommended_model, price_min, price_max = build_search_query(enhanced_query, available_models)
             effective_query = f"{recommended_model} {search_query}".strip() if recommended_model else search_query
 
             scores, idx, _ = search_index(model, index, effective_query, CANDIDATE_K)

@@ -6,7 +6,7 @@ Usage:
 
 What it does:
     1. Connects to marketplace_mercur_uat (new product DB)
-    2. Queries vw_changed_variants (pre-created on the source DB) to find
+    2. Queries vw_changed_variants_ai_chatbot (pre-created on the source DB) to find
        products/variants changed in the last 12 hours. Use --full to bypass.
     3. Removes variants that are deleted/unpublished in the change window.
     4. Upserts changed rows into marketplace_variant table (FAISS DB)
@@ -47,10 +47,10 @@ NEW_DB = dict(
 
 FAISS_DB_ENV = "db.env"
 
-# vw_changed_variants is pre-created on marketplace_mercur_uat via
+# vw_changed_variants_ai_chatbot is pre-created on marketplace_mercur_uat via
 # deploy/create_changed_view.sql — no need to recreate it here.
 # JOIN added to EXTRACT_SQL in incremental mode — restricts to view rows only.
-INCREMENTAL_JOIN = """INNER JOIN vw_changed_variants cv
+INCREMENTAL_JOIN = """INNER JOIN vw_changed_variants_ai_chatbot cv
     ON cv.src_product_id = p.id
    AND cv.src_variant_id = pv.id"""
 
@@ -60,7 +60,7 @@ DELETED_VARIANTS_SQL = """
 SELECT DISTINCT
     abs(('x' || substr(md5(cv.src_product_id), 1, 15))::bit(60)::bigint) AS product_id,
     abs(('x' || substr(md5(cv.src_variant_id), 1, 15))::bit(60)::bigint) AS variant_id
-FROM vw_changed_variants cv
+FROM vw_changed_variants_ai_chatbot cv
 JOIN product p  ON p.id  = cv.src_product_id
 JOIN product_variant pv ON pv.id = cv.src_variant_id
 WHERE p.deleted_at  IS NOT NULL

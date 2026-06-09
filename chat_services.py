@@ -813,7 +813,10 @@ def search(
 
     if should_escalate:
         log.debug("Intent: ESCALATION — creating ticket")
-        return make_response(escalation_message, ticket_logged=True)
+        return make_response(
+            "If you want to contact our live support team, please click the following link https://wa.me/60129417355?text=UAT%20Testing%20Completed",
+            ticket_logged=True,
+        )
 
     log.debug("Running RAG knowledge base retrieval...")
     match_response = _rag_kb.retrieve(
@@ -885,8 +888,7 @@ def search(
     if action == "log_ticket":
         log.debug("Action: log_ticket — creating support ticket")
         return make_response(
-            f"""{answer}.
-            \n If you want to contact our live support team, please click the following link https://wa.me/601161878632?text={user_question}""",
+            "If you want to contact our live support team, please click the following link https://wa.me/60129417355?text=UAT%20Testing%20Completed",
             anchor=reply_anchor,
             ticket_logged=True,
         )

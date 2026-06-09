@@ -29,8 +29,22 @@ aws ssm start-session \
     --profile "$AWS_PROFILE" &
 TUNNEL_PID=$!
 
-# Give the tunnel a moment to establish
-sleep 5
+# Wait until port 5421 is accepting TCP connections (max 30 s)
+log "Waiting for tunnel on port 5421 to become ready..."
+READY=0
+for i in $(seq 1 30); do
+    if nc -z 127.0.0.1 5421 2>/dev/null; then
+        log "  Port 5421 is ready (after ${i}s)."
+        READY=1
+        break
+    fi
+    sleep 1
+done
+if [[ $READY -eq 0 ]]; then
+    log "ERROR: Port 5421 did not become ready within 30 seconds. Aborting."
+    kill "$TUNNEL_PID" 2>/dev/null || true
+    exit 1
+fi
 
 # ── Run the sync ──────────────────────────────────────────────────────────────
 log "Running sync_new_products.py --rebuild-index ..."

@@ -5,7 +5,7 @@
 --        -U szekiat -d marketplace_mercur_uat \
 --        -f deploy/create_changed_view.sql
 
-CREATE OR REPLACE VIEW vw_changed_variants AS
+CREATE OR REPLACE VIEW vw_changed_variants_ai_chatbot AS
 
 -- product core (title, status, handle …)
 SELECT DISTINCT p.id AS src_product_id, pv.id AS src_variant_id
@@ -75,4 +75,4 @@ WHERE il.created_at >= NOW() - INTERVAL '12 hours'
 ;
 
 -- Verify
-SELECT COUNT(*) AS changed_variants_last_12h FROM vw_changed_variants;
+SELECT COUNT(*) AS changed_variants_last_12h FROM vw_changed_variants_ai_chatbot;
