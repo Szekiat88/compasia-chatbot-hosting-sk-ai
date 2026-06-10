@@ -24,8 +24,8 @@ BASE_DIR = Path(__file__).parent
 _ENV_FILE = BASE_DIR / "db_new.env"
 
 
-# CAM order ID pattern: CAM followed by alphanumeric characters (e.g. CAMY575, CAM1234)
-_CAM_ORDER_RE = re.compile(r"(?<![A-Z0-9])#?(CAM[0-9A-Z-]+)\b", re.IGNORECASE)
+# CAM order ID pattern: must start with CAMY (e.g. CAMY575, CAMY1234).
+_CAM_ORDER_RE = re.compile(r"(?<![A-Z0-9])#?(CAMY[0-9A-Z-]*\d[0-9A-Z-]*)\b", re.IGNORECASE)
 
 
 def _load_env_file() -> dict[str, str]:

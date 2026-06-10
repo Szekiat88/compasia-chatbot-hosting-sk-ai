@@ -15,3 +15,10 @@ try:
 except Exception:
     PRIMARY_MODEL     = os.getenv("LANGUAGE_MODEL", "models/gemini-2.5-flash")
     TRANSLATION_MODEL = "gpt-4o-mini"
+
+# Higher-reasoning model for product query parsing (search query, recommended
+# model, price filters) — needs stronger judgement than the fast-path Flash model.
+try:
+    from nlu_core import MATCH_GEMINI_MODEL as RECOMMENDATION_MODEL
+except Exception:
+    RECOMMENDATION_MODEL = os.getenv("RECOMMENDATION_MODEL", "models/gemini-2.5-pro")

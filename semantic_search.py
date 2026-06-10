@@ -29,7 +29,11 @@ CACHE_DIR = os.getenv("SEMANTIC_CACHE_DIR", ".cache_semantic_search")
 CACHE_META = "meta.json"
 CACHE_INDEX = "index.faiss"
 CACHE_EMBEDDINGS = "embeddings.parquet"
-from _ai_config import get_primary_key as _get_primary_key, PRIMARY_MODEL as _PRIMARY_MODEL
+from _ai_config import (
+    get_primary_key as _get_primary_key,
+    PRIMARY_MODEL as _PRIMARY_MODEL,
+    RECOMMENDATION_MODEL as _RECOMMENDATION_MODEL,
+)
 
 class _NumpyIPIndex:
     """Minimal FAISS-like index fallback using inner-product search."""
@@ -154,7 +158,7 @@ def build_search_query(
     if available_models:
         _sys += _T[14].replace("{models_list}", ", ".join(available_models))
     _spec = _sys + "\nQuery: " + query
-    response = client.models.generate_content(model=_PRIMARY_MODEL, contents=_spec)
+    response = client.models.generate_content(model=_RECOMMENDATION_MODEL, contents=_spec)
     text = (response.text or "").strip()
     if text.startswith("```"):
         text = text.strip("`")

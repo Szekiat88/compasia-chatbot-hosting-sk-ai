@@ -375,16 +375,32 @@ class LocalEngineClient:
                 for r in record_map.values()
                 if r.get("handle")
             }
+            q_lower = question.lower()
+            _APPLE_PREFIXES = ("iphone", "ipad", "macbook")
+            _ANDROID_BRANDS = ("samsung", "pixel", "oppo", "xiaomi", "huawei", "vivo", "realme", "honor", "asus", "oneplus")
+            # Detect if user is asking for Android without specifying a brand
+            is_android_query = (
+                "android" in q_lower
+                and not any(p in q_lower for p in _APPLE_PREFIXES)
+            )
             brand_prefix: str | None = None
-            for brand in ("iphone", "ipad", "macbook", "samsung", "pixel", "oppo", "xiaomi", "huawei"):
-                if brand in question.lower():
+            for brand in (*_APPLE_PREFIXES, *_ANDROID_BRANDS):
+                if brand in q_lower:
                     brand_prefix = brand
                     break
-            available_models: list[str] | None = (
-                sorted(h for h in all_handles if h.startswith(brand_prefix))
-                if brand_prefix
-                else None
-            )
+            if brand_prefix:
+                available_models: list[str] | None = sorted(h for h in all_handles if h.startswith(brand_prefix))
+            elif is_android_query:
+                # Exclude Apple products so Gemini only picks from Android models
+                available_models = sorted(
+                    h for h in all_handles
+                    if not any(h.startswith(p) for p in _APPLE_PREFIXES)
+                )
+            else:
+                # No brand mentioned (e.g. "newest phone", "recommend a phone") —
+                # still pass the full in-stock list so Gemini picks a model that
+                # actually exists rather than an outdated one from training data.
+                available_models = sorted(all_handles)
 
             search_query, recommended_model, price_min, price_max = build_search_query(enhanced_query, available_models)
             effective_query = f"{recommended_model} {search_query}".strip() if recommended_model else search_query
@@ -408,6 +424,12 @@ class LocalEngineClient:
             )
             if not rows:
                 return "No products match your price range."
+
+            # Hard-filter Apple products out of results when user asked for Android
+            if is_android_query:
+                rows = [r for r in rows if not any(str(r.get("handle", "")).lower().startswith(p) for p in _APPLE_PREFIXES)]
+                if not rows:
+                    return "Sorry, I couldn't find any Android phones in stock matching your request."
 
             handles = [r["handle"] for r in rows if r.get("handle")]
             in_results = _recommended_in_results(recommended_model or "", handles)
